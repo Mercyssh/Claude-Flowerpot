@@ -18,6 +18,7 @@ const params = {
   noiseFreq: 0.2,           // spatial frequency of the petal-wobble noise
   noiseClosed: 0.03,        // wobble amplitude while a flower is closed
   noiseOpen: 0.04,          // wobble amplitude while a flower is bloomed
+  introStagger: 0.2,       // seconds between successive flowers entering
   introSpinTurns: 0.8,      // full rotations each flower does while flying in
   bloomSpin: 1.15,           // radians a flower turns as it blooms (stops when open)
   backsideOverlay: false,   // tint the back faces of the petals
@@ -30,7 +31,6 @@ const params = {
 
 // Intro fly-in tuning
 const INTRO_TRAVEL = 3.8;   // seconds each flower spends travelling the path
-const INTRO_STAGGER = 0.55; // seconds between successive flowers entering
 
 const POPUP_TEXT = [
   "for the quiet days",
@@ -627,7 +627,7 @@ function animate() {
     for (const f of flowers) {
       // Right flower (index 2) enters first, then center, then left.
       const order = 2 - f.index;
-      const local = clamp01((introTime - order * INTRO_STAGGER) / INTRO_TRAVEL);
+      const local = clamp01((introTime - order * params.introStagger) / INTRO_TRAVEL);
       const e = easeInOutCubic(local); // shared easing → position + spin stay in sync
       // Travel by arc-length fraction → even speed along the whole path.
       introCurve.getPointAt(e * introStopS[f.index], introTmp);
@@ -729,6 +729,7 @@ const motion = gui.addFolder("petal motion");
 motion.add(params, "noiseFreq", 0.2, 6, 0.05).name("wobble scale");
 motion.add(params, "noiseClosed", 0, 0.2, 0.005).name("wobble (closed)");
 motion.add(params, "noiseOpen", 0, 0.2, 0.005).name("wobble (bloomed)");
+motion.add(params, "introStagger", 0, 2, 0.05).name("fly-in stagger");
 motion.add(params, "introSpinTurns", 0, 5, 0.1).name("fly-in spins");
 motion.add(params, "bloomSpin", 0, Math.PI, 0.05).name("bloom spin");
 
