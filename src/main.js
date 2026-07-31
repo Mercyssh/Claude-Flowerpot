@@ -15,7 +15,12 @@ const params = {
   flowerAttachScale: 0.35,  // scale the chosen flower shrinks to on the head
   flowerSpacing: 1.27,      // x-distance of the outer flowers from center
   orbitAmount: 0.35,        // portrait mouse-look: head rotation magnitude (radians)
-  paintSpeed: 0.5,          // paint-in dissolve speed (progress/sec)
+  paintSpeed: 0.3,          // paint-in dissolve speed (progress/sec)
+  flowerSnapSpeed: 0.3,     // flower-snap speed (progress/sec); matches paintSpeed by default
+  appearDir: "back",          // direction the paint stroke travels across the head
+  appearNoiseScale: 2.0,    // grain of the brush streaks (higher = finer bristles)
+  appearJitter: 0.35,       // how ragged/broken the wet paint front is (0 = clean wipe)
+  appearEdgeSoft: 0.06,     // feather width of the wet edge (0 = hard cut, >0 = soft fade)
   fovBefore: 45,            // camera FOV while choosing (before a flower is picked)
   fovAfter: 22,             // camera FOV in the portrait (after selection)
   noiseFreq: 0.2,           // spatial frequency of the petal-wobble noise
@@ -29,6 +34,13 @@ const params = {
   backsideColor: "#8a2f2f", // color blended into the tinted-side texture
   backsideStrength: 0.6,    // peak tint strength at full closed/open (0..1)
   headScale: 3.9,           // uniform scale of the person model
+};
+
+// Paint-stroke travel directions (object space) for the head reveal.
+const APPEAR_DIRS = {
+  up: [0, 1, 0], down: [0, -1, 0],
+  left: [-1, 0, 0], right: [1, 0, 0],
+  front: [0, 0, 1], back: [0, 0, -1],
 };
 
 // Intro fly-in tuning (finalized — no longer GUI-exposed)
@@ -88,6 +100,7 @@ let hovered = null;
 let selected = null;
 
 let paintProgress = 0;     // 0 = head invisible, 1 = fully painted in
+let headReplay = false;    // true while a GUI-triggered reveal replay is running
 let head = null;           // container for the person model
 let headMaterials = [];    // per-mesh materials whose uProgress drives paint-in
 let flowerAnchor = null;   // empty pulled from the GLB; flower flies + faces here
@@ -377,13 +390,26 @@ const personTex = new THREE.TextureLoader().load("./person%20model/base_color.pn
 personTex.colorSpace = THREE.SRGBColorSpace;
 personTex.flipY = false; // glTF UV convention
 
-// Unlit head material. uProgress (0 → 1) sweeps a simplex-noise dissolve edge
-// so texels reveal in a brushy front. Live uniform is stashed for per-frame use.
+// Unlit head material. uProgress (0 → 1) drives a directional "paint" reveal: a
+// gradient sweeps a wet front across the head along uAppearDir, and simplex noise
+// (stretched along the stroke, so it streaks like bristles) breaks that front into
+// a ragged brushy edge instead of texels popping in place. Center/radius come from
+// the mesh bounding sphere so the sweep spans the model regardless of its units.
 function makeHeadMaterial(map) {
-  const mat = new THREE.MeshBasicMaterial({ map, side: THREE.DoubleSide });
-  const u = { uProgress: { value: 0 } };
+  // transparent so the feathered reveal edge can fade in via alpha; once fully
+  // painted (uProgress=1) alpha is 1 everywhere, so it renders opaque.
+  const mat = new THREE.MeshBasicMaterial({ map, side: THREE.DoubleSide, transparent: true });
+  const u = {
+    uProgress: { value: 0 },
+    uAppearScale: { value: params.appearNoiseScale },              // brush-streak grain
+    uAppearSoft: { value: params.appearEdgeSoft },                 // wet-edge feather
+    uAppearJitter: { value: params.appearJitter },                 // how ragged the front is
+    uAppearDir: { value: new THREE.Vector3(...APPEAR_DIRS[params.appearDir]) }, // stroke travel
+    uCenter: { value: new THREE.Vector3() },                       // set from bounding sphere
+    uRadius: { value: 1 },                                         // set from bounding sphere
+  };
   mat.onBeforeCompile = (shader) => {
-    shader.uniforms.uProgress = u.uProgress;
+    Object.assign(shader.uniforms, u);
     shader.vertexShader =
       "varying vec3 vObjPos;\n" +
       shader.vertexShader.replace(
@@ -391,17 +417,51 @@ function makeHeadMaterial(map) {
         "#include <begin_vertex>\n  vObjPos = position;"
       );
     shader.fragmentShader =
-      "uniform float uProgress;\nvarying vec3 vObjPos;\n" +
+      "uniform float uProgress;\nuniform float uAppearScale;\nuniform float uAppearSoft;\n" +
+      "uniform float uAppearJitter;\nuniform float uRadius;\nuniform vec3 uAppearDir;\nuniform vec3 uCenter;\n" +
+      "varying vec3 vObjPos;\n" +
       NOISE_GLSL +
       shader.fragmentShader.replace(
         "#include <map_fragment>",
         /* glsl */`#include <map_fragment>
-        float _n = snoise(vObjPos * 3.0) * 0.5 + 0.5; // 0..1 brushy field
-        if (_n > uProgress * 1.2 - 0.1) discard;       // not yet painted in`
+        vec3 _rel = vObjPos - uCenter;
+        // 0..1 position along the stroke direction across the model
+        float _g = dot(_rel, uAppearDir) / (2.0 * uRadius) + 0.5;
+        // noise sampled with its component along the stroke compressed → streaks
+        // elongate in the direction of travel, reading as bristle marks.
+        vec3 _np = _rel * uAppearScale;
+        _np -= uAppearDir * dot(_np, uAppearDir) * 0.7;
+        float _field = _g + snoise(_np) * uAppearJitter; // ragged wet front
+        // sweep the reveal threshold from before the front to past it as progress runs
+        float _t = mix(-uAppearJitter - 0.05, 1.0 + uAppearJitter + 0.05, uProgress);
+        float _a = 1.0 - smoothstep(_t - uAppearSoft, _t + uAppearSoft, _field);
+        if (_a <= 0.001) discard;      // not yet painted in
+        diffuseColor.a *= _a;`
       );
   };
   mat.userData.progressUniform = u.uProgress;
+  mat.userData.appearUniforms = u;
   return mat;
+}
+
+// Push live appear-noise params into every head material's uniforms.
+function applyAppearNoise() {
+  for (const m of headMaterials) {
+    const u = m.userData.appearUniforms;
+    if (!u) continue;
+    u.uAppearScale.value = params.appearNoiseScale;
+    u.uAppearSoft.value = params.appearEdgeSoft;
+    u.uAppearJitter.value = params.appearJitter;
+    u.uAppearDir.value.set(...APPEAR_DIRS[params.appearDir]);
+  }
+}
+
+// Restart the head paint-in reveal from scratch (GUI button).
+function replayHeadAppear() {
+  head.visible = true;
+  paintProgress = 0;
+  for (const m of headMaterials) m.userData.progressUniform.value = 0;
+  headReplay = true;
 }
 
 head = new THREE.Group();
@@ -449,6 +509,12 @@ loader.load("./person%20model/person.glb", (gltf) => {
     if (o.isMesh) {
       o.material = makeHeadMaterial(personTex); // unlit + paint-in
       headMaterials.push(o.material);
+      // feed the reveal sweep the mesh extent so the gradient spans the model
+      o.geometry.computeBoundingSphere();
+      const bs = o.geometry.boundingSphere;
+      const u = o.material.userData.appearUniforms;
+      u.uCenter.value.copy(bs.center);
+      u.uRadius.value = bs.radius;
     }
     if (o.name && o.name.toLowerCase() === "floweranchor") flowerAnchor = o;
   });
@@ -463,6 +529,7 @@ const pointer = new THREE.Vector2();
 const mouseNDC = new THREE.Vector2();
 const popup = document.getElementById("popup");
 const poemEl = document.getElementById("poem");
+const bgText = document.getElementById("bg-text");
 
 let mouseX = 0, mouseY = 0;
 window.addEventListener("pointermove", (e) => {
@@ -503,6 +570,11 @@ window.addEventListener("pointerdown", () => {
   phase = PHASE.TRANSITION;
   popup.classList.remove("visible");
   head.visible = true;
+  headRestQuat.copy(head.quaternion); // capture rest pose now so mouse-look can start immediately
+  paintProgress = 0;
+  flowerSnapT = 0;
+  snapCaptured = false;
+  bgText?.classList.add("faded"); // fade the landing headline out
 });
 
 // Scroll-reveal for the poem
@@ -534,6 +606,15 @@ const _headLookEuler = new THREE.Euler();
 const _headLookOffset = new THREE.Quaternion();
 const _headLookTarget = new THREE.Quaternion();
 
+// Timed flower-snap: 0→1 over the transition, driven at params.flowerSnapSpeed so
+// it can share (or diverge from) the head's appear duration. Start pose is
+// captured once, in the anchor's local frame, then eased toward the rest pose.
+let flowerSnapT = 0;
+let snapCaptured = false;
+const _snapStartPos = new THREE.Vector3();
+const _snapStartQuat = new THREE.Quaternion();
+let _snapStartScale = 1;
+
 // Ease the chosen flower toward its resting pose *inside the anchor's frame*:
 // local origin, identity rotation (so it faces along the anchor's Z), and the
 // requested world scale (divide out the anchor's world scale). Run every frame
@@ -550,6 +631,22 @@ function settleFlowerOnAnchor(dt, lambda) {
   } else {
     // No anchor loaded — just settle the world scale.
     selected.group.scale.setScalar(damp(selected.group.scale.x, params.flowerAttachScale, lambda, dt));
+  }
+}
+
+// Timed variant of the settle: ease the flower from its captured start pose to
+// the anchor's rest pose by a normalized factor e (0→1), so the snap has a fixed
+// duration that can be matched to the head's appear animation.
+function applyFlowerSnap(e) {
+  if (!selected) return;
+  if (flowerAnchor && selected.group.parent === flowerAnchor) {
+    selected.group.position.lerpVectors(_snapStartPos, _zero, e);
+    selected.group.quaternion.copy(_snapStartQuat).slerp(_identQuat, e);
+    flowerAnchor.getWorldScale(_anchorScale);
+    const target = params.flowerAttachScale / _anchorScale.x;
+    selected.group.scale.setScalar(THREE.MathUtils.lerp(_snapStartScale, target, e));
+  } else {
+    selected.group.scale.setScalar(THREE.MathUtils.lerp(_snapStartScale, params.flowerAttachScale, e));
   }
 }
 
@@ -571,6 +668,13 @@ function animate() {
   if (headEdit.show) {
     head.visible = true;
     for (const m of headMaterials) m.userData.progressUniform.value = 1;
+  }
+
+  // GUI "replay" — re-run the paint-in reveal in any phase (e.g. the portrait).
+  if (headReplay && !headEdit.show) {
+    paintProgress = Math.min(1, paintProgress + params.paintSpeed * dt);
+    for (const m of headMaterials) m.userData.progressUniform.value = paintProgress;
+    if (paintProgress >= 1) headReplay = false;
   }
 
   // --- Petal wobble: feed live uniforms to every flower material ---
@@ -628,61 +732,62 @@ function animate() {
     }
   }
 
-  // --- Phase 2: transition — the chosen flower eases into the anchor's frame ---
+  // --- Phase 2: transition — head appears while the chosen flower snaps in ---
   if (phase === PHASE.TRANSITION) {
     // keep the selected flower open
     selected.current = damp(selected.current, 0, params.bloomSpeed, dt);
     setBloom(selected, selected.current);
 
-    // Parent to the anchor up front so the flower eases toward a *fixed* local
-    // pose — nothing re-parents at the phase boundary, so nothing snaps.
+    // Parent to the anchor up front, then capture the flower's start pose (in the
+    // anchor's local frame) once, so the timed snap eases from a fixed point.
     if (flowerAnchor && selected.group.parent !== flowerAnchor) {
       flowerAnchor.attach(selected.group);
     }
+    if (!snapCaptured) {
+      _snapStartPos.copy(selected.group.position);
+      _snapStartQuat.copy(selected.group.quaternion);
+      _snapStartScale = selected.group.scale.x;
+      snapCaptured = true;
+    }
 
     // shrink the unselected flowers away
-    let othersGone = true;
     for (const f of flowers) {
       if (f === selected) continue;
-      const s = damp(f.group.scale.x, 0.0001, 8, dt);
-      f.group.scale.setScalar(s);
-      if (s > 0.02) othersGone = false;
+      f.group.scale.setScalar(damp(f.group.scale.x, 0.0001, 8, dt));
     }
 
-    // paint in the head once the others are gone
-    if (othersGone) {
-      paintProgress = Math.min(1, paintProgress + params.paintSpeed * dt);
-      for (const m of headMaterials) m.userData.progressUniform.value = paintProgress;
-    }
+    // Drive head reveal and flower snap on their own timelines — same default
+    // duration (matched speeds), both starting now so they run simultaneously.
+    paintProgress = Math.min(1, paintProgress + params.paintSpeed * dt);
+    for (const m of headMaterials) m.userData.progressUniform.value = paintProgress;
+    flowerSnapT = Math.min(1, flowerSnapT + params.flowerSnapSpeed * dt);
+    applyFlowerSnap(easeInOutCubic(flowerSnapT));
 
-    settleFlowerOnAnchor(dt, 3);
-
-    if (paintProgress >= 0.999) {
+    if (paintProgress >= 0.999 && flowerSnapT >= 0.999) {
       phase = PHASE.PORTRAIT;
       poemEl.classList.add("active");
       poemEl.setAttribute("aria-hidden", "false");
-      headRestQuat.copy(head.quaternion); // pose to compose the mouse-look on top of
     }
   }
 
-  // --- Phase 3: keep settling so the flower finishes easing in (never freezes
-  // mid-flight) and flowerAttachScale stays live. ---
+  // --- Phase 3: keep settling so the flower stays locked and flowerAttachScale
+  // stays live. ---
   if (phase === PHASE.PORTRAIT && selected) {
     settleFlowerOnAnchor(dt, 6);
+  }
 
-    // Soft mouse-look: rotate the head (the attached flower rides along) around
-    // its resting pose — yaw from mouse X, a gentler pitch from mouse Y.
-    if (!headEdit.show) {
-      _headLookEuler.set(
-        mouseNDC.y * params.orbitAmount * 0.6,
-        mouseNDC.x * params.orbitAmount,
-        0,
-        "YXZ",
-      );
-      _headLookOffset.setFromEuler(_headLookEuler);
-      _headLookTarget.copy(headRestQuat).multiply(_headLookOffset);
-      head.quaternion.slerp(_headLookTarget, 1 - Math.exp(-4 * dt));
-    }
+  // Soft mouse-look runs from the moment the head appears (transition) onward, so
+  // the head can be rotated while it's still painting in — not only afterwards.
+  if ((phase === PHASE.TRANSITION || phase === PHASE.PORTRAIT) && !headEdit.show) {
+    _headLookEuler.set(
+      mouseNDC.y * params.orbitAmount * 0.6,
+      mouseNDC.x * params.orbitAmount,
+      0,
+      "YXZ",
+    );
+    _headLookOffset.setFromEuler(_headLookEuler);
+    _headLookTarget.copy(headRestQuat).multiply(_headLookOffset);
+    head.quaternion.slerp(_headLookTarget, 1 - Math.exp(-4 * dt));
   }
 
   // --- Camera framing ---
@@ -716,11 +821,21 @@ gui.add(params, "closedShrink", 0.5, 1, 0.01);
 gui.add(params, "openScale", 0.8, 1.8, 0.01);
 gui.add(params, "flowerAttachScale", 0.05, 1, 0.01);
 gui.add(params, "orbitAmount", 0, 0.5, 0.01);
-gui.add(params, "paintSpeed", 0.1, 2, 0.05);
+
+const appear = gui.addFolder("person appear");
+appear.add(params, "paintSpeed", 0.1, 2, 0.05).name("speed");
+appear.add(params, "flowerSnapSpeed", 0.1, 2, 0.05).name("flower snap speed");
+appear.add(params, "appearDir", Object.keys(APPEAR_DIRS)).name("stroke direction").onChange(applyAppearNoise);
+appear.add(params, "appearNoiseScale", 0.5, 12, 0.1).name("brush grain").onChange(applyAppearNoise);
+appear.add(params, "appearJitter", 0, 1, 0.01).name("edge raggedness").onChange(applyAppearNoise);
+appear.add(params, "appearEdgeSoft", 0, 0.5, 0.005).name("edge softness").onChange(applyAppearNoise);
+appear.add({ replay: replayHeadAppear }, "replay").name("▶ replay reveal");
+// appear.close();
 
 const cam = gui.addFolder("camera");
 cam.add(params, "fovBefore", 10, 90, 1).name("fov (before select)");
 cam.add(params, "fovAfter", 10, 90, 1).name("fov (after select)");
+cam.close();
 
 // Person model placement — draggable gizmo + exact numeric fields.
 headFolder = gui.addFolder("person model");
@@ -736,6 +851,7 @@ headFolder.add(head.rotation, "z", -Math.PI, Math.PI, 0.01).name("rot z").listen
 headFolder.add(params, "headScale", 0.05, 5, 0.01).name("scale (uniform)")
   .onChange((v) => head.scale.setScalar(v));
 headFolder.add({ log: logHeadTransform }, "log").name("log transform → console");
+headFolder.close();
 
 const motion = gui.addFolder("petal motion");
 motion.add(params, "noiseFreq", 0.2, 6, 0.05);
