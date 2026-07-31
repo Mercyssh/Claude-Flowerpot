@@ -1,8 +1,31 @@
-* { margin: 0; padding: 0; box-sizing: border-box; }
+@font-face {
+  font-family: "Qinferly";
+  src: url("../fonts/qinferly-personal-use/Qinferly.ttf") format("truetype");
+  font-display: swap;
+}
 
-html, body { width: 100%; height: 100%; overflow: hidden; background: #f6ece2; }
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
 
-#scene { position: fixed; inset: 0; display: block; width: 100%; height: 100%; z-index: 1; }
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #f6ece2;
+}
+
+#scene {
+  position: fixed;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+}
 
 /* Landing text — behind the transparent canvas so flowers can mask it */
 #bg-text {
@@ -12,22 +35,58 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #f6ece2; }
   transform: translateX(-50%);
   z-index: 0;
   margin: 0;
-  font-family: "Caveat", cursive;
-  font-weight: 600;
-  font-size: clamp(40px, 8vw, 120px);
+  font-family: "Qinferly", "Caveat", cursive;
+  font-size: clamp(40px, 6vw, 120px);
+  font-weight: 400;
+  text-align: center;
+  line-height: 1.3em;
   color: #d0a48c;
   white-space: nowrap;
   pointer-events: none;
   user-select: none;
-  transition: opacity 0.8s ease;
+  transform: translateX(-50%) scale(1);
+  filter: blur(0px);
+  transition: opacity 0.8s ease, transform 0.8s ease, filter 0.8s ease;
 }
-/* Faded once a flower is chosen */
-#bg-text.faded { opacity: 0; }
+
+/* Faded once a flower is chosen — blur + shrink while fading out */
+#bg-text.faded {
+  opacity: 0;
+  transform: translateX(-50%) scale(0.92);
+  filter: blur(8px);
+}
+
+/* Per-character wrappers. Outer .char carries the mouse-driven displacement
+   (JS inline transform); inner .char-inner carries the cascade-in animation,
+   so the two transforms never fight over the same element. */
+#bg-text .char {
+  display: inline-block;
+  transform: translate(0, 0);
+  will-change: transform;
+}
+#bg-text .char.space {
+  white-space: pre;
+}
+#bg-text .char-inner {
+  display: inline-block;
+  opacity: 0;
+  transform: translateY(0.5em) rotate(6deg);
+  animation: char-cascade 0.6s cubic-bezier(0.2, 0.8, 0.25, 1) forwards;
+  animation-delay: var(--char-delay, 0s);
+}
+
+@keyframes char-cascade {
+  to {
+    opacity: 1;
+    transform: translateY(0) rotate(0deg);
+  }
+}
 
 /* Hover popup — follows the mouse in phase 1 */
 .popup {
   position: fixed;
-  top: 0; left: 0;
+  top: 0;
+  left: 0;
   padding: 8px 14px;
   background: rgba(30, 28, 24, 0.92);
   color: #f6f3ec;
@@ -42,12 +101,17 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #f6ece2; }
   white-space: nowrap;
   z-index: 10;
 }
-.popup.visible { opacity: 1; transform: translate(-50%, 14px) scale(1); }
+
+.popup.visible {
+  opacity: 1;
+  transform: translate(-50%, 14px) scale(1);
+}
 
 /* Poem panel — right half, scroll-reveal in phase 2 */
 .poem {
   position: fixed;
-  top: 0; right: 0;
+  top: 0;
+  right: 0;
   width: 50vw;
   height: 100%;
   overflow-y: auto;
@@ -58,9 +122,15 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #f6ece2; }
   z-index: 5;
   user-select: none;
 }
-.poem.active { opacity: 1; pointer-events: auto; }
 
-.poem-inner { max-width: 34ch; }
+.poem.active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.poem-inner {
+  max-width: 34ch;
+}
 
 .poem .line {
   font-family: "Cormorant Garamond", serif;
@@ -72,7 +142,11 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #f6ece2; }
   transform: translateY(18px);
   transition: opacity 0.7s ease, transform 0.7s ease;
 }
-.poem .line.revealed { opacity: 1; transform: translateY(0); }
+
+.poem .line.revealed {
+  opacity: 1;
+  transform: translateY(0);
+}
 
 .poem .signature {
   font-family: "Caveat", cursive;
@@ -83,4 +157,8 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #f6ece2; }
   transform: translateY(18px);
   transition: opacity 0.8s ease, transform 0.8s ease;
 }
-.poem .signature.revealed { opacity: 1; transform: translateY(0); }
+
+.poem .signature.revealed {
+  opacity: 1;
+  transform: translateY(0);
+}

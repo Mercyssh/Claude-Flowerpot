@@ -535,9 +535,90 @@ const popup = document.getElementById("popup");
 const poemEl = document.getElementById("poem");
 const bgText = document.getElementById("bg-text");
 
+// ---------------------------------------------------------------------------
+// Landing headline — cascade-in + magnetic mouse-avoidance per character
+// ---------------------------------------------------------------------------
+const CHAR_FX = {
+  enabled: true,      // master toggle for the mouse-avoidance behaviour
+  radius: 130,        // px — how close the cursor must be before a char reacts
+  push: 12,           // px — max displacement a char is pushed away from cursor
+  stiffness: 0.07,    // spring pull back toward origin (0..1, higher = snappier)
+  cascadeStep: 0.045, // s — delay added per character in the intro cascade
+  bobAmp: 2,          // px — vertical bob height per character
+  bobSpeed: 1.6,      // rad/s — bob oscillation speed
+  bobStagger: 0.5,    // rad of phase offset added per character (the "wave")
+};
+
+// Split the headline into per-character spans (preserving <br> and spaces),
+// wiring up the staggered cascade delay as we go.
+const chars = [];
+(function splitBgText() {
+  if (!bgText) return;
+  const nodes = [...bgText.childNodes];
+  bgText.textContent = "";
+  let i = 0;
+  for (const node of nodes) {
+    if (node.nodeName === "BR") { bgText.appendChild(document.createElement("br")); continue; }
+    for (const ch of node.textContent) {
+      const outer = document.createElement("span");
+      outer.className = ch === " " ? "char space" : "char";
+      const inner = document.createElement("span");
+      inner.className = "char-inner";
+      inner.textContent = ch;
+      inner.style.setProperty("--char-delay", (i * CHAR_FX.cascadeStep).toFixed(3) + "s");
+      outer.appendChild(inner);
+      bgText.appendChild(outer);
+      chars.push({ el: outer, dx: 0, dy: 0, phase: i * CHAR_FX.bobStagger });
+      i++;
+    }
+  }
+})();
+
+// Magnetic avoidance loop: each char is pushed away from the cursor when close,
+// then spring-pulled back to its layout origin every frame. Origins are read
+// from offsetLeft/Top so self-transforms never contaminate the measurement.
+let charMouseX = -9999, charMouseY = -9999;
+// Toggle the avoidance on/off with the "T" key (chars still animate back to rest
+// when disabled). Also exposed as window.CHAR_FX for live tweaking in the console.
+window.CHAR_FX = CHAR_FX;
+window.addEventListener("keydown", (e) => {
+  if (e.key === "t" || e.key === "T") CHAR_FX.enabled = !CHAR_FX.enabled;
+});
+(function charFxLoop() {
+  requestAnimationFrame(charFxLoop);
+  if (!bgText || bgText.classList.contains("faded")) return;
+  const base = bgText.getBoundingClientRect();
+  const active = CHAR_FX.enabled;
+  const now = performance.now() / 1000;
+  for (const c of chars) {
+    // avoidance target — sprung toward smoothly, so pushes ease in and out
+    let tx = 0, ty = 0;
+    if (active) {
+      const cx = base.left + c.el.offsetLeft + c.el.offsetWidth / 2;
+      const cy = base.top + c.el.offsetTop + c.el.offsetHeight / 2;
+      const vx = cx - charMouseX, vy = cy - charMouseY;
+      const dist = Math.hypot(vx, vy);
+      if (dist < CHAR_FX.radius && dist > 0.001) {
+        // smoothstep falloff so the push eases in/out instead of a linear ramp
+        const t = 1 - dist / CHAR_FX.radius;
+        const force = t * t * (3 - 2 * t) * CHAR_FX.push;
+        tx = (vx / dist) * force;
+        ty = (vy / dist) * force;
+      }
+    }
+    c.dx += (tx - c.dx) * CHAR_FX.stiffness;
+    c.dy += (ty - c.dy) * CHAR_FX.stiffness;
+    // staggered vertical bob — same wave for every char, phase-shifted; added
+    // on top of the sprung avoidance so it keeps its full amplitude
+    const bob = Math.sin(now * CHAR_FX.bobSpeed + c.phase) * CHAR_FX.bobAmp;
+    c.el.style.transform = `translate(${c.dx.toFixed(2)}px, ${(c.dy + bob).toFixed(2)}px)`;
+  }
+})();
+
 let mouseX = 0, mouseY = 0;
 window.addEventListener("pointermove", (e) => {
   mouseX = e.clientX; mouseY = e.clientY;
+  charMouseX = e.clientX; charMouseY = e.clientY;
   pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
   pointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
   mouseNDC.set(pointer.x, pointer.y);
