@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { TransformControls } from "three/addons/controls/TransformControls.js";
 import GUI from "lil-gui";
 
 // ---------------------------------------------------------------------------
@@ -11,6 +12,7 @@ const params = {
   bloomSpeed: 2.5,          // how fast a flower blooms/closes on hover
   closedShrink: 0.7,        // scale of a fully-closed flower
   openScale: 0.8,           // scale of a fully-bloomed flower
+  flowerAttachScale: 0.35,  // scale the chosen flower shrinks to on the head
   flowerSpacing: 1.27,      // x-distance of the outer flowers from center
   orbitAmount: 0.12,        // camera orbit magnitude in phase 2
   paintSpeed: 0.5,          // paint-in dissolve speed (progress/sec)
@@ -24,6 +26,7 @@ const params = {
   backsideFace: "back",     // winding flip: swap if the tint lands on the wrong side
   backsideColor: "#8a2f2f", // color blended into the tinted-side texture
   backsideStrength: 0.6,    // peak tint strength at full closed/open (0..1)
+  headScale: 3.05,          // uniform scale of the person model
 };
 
 // Intro fly-in tuning (finalized — no longer GUI-exposed)
@@ -83,9 +86,13 @@ let hovered = null;
 let selected = null;
 
 let paintProgress = 0;     // 0 = head invisible, 1 = fully painted in
-let head = null;
-let headMaterial = null;
-let flowerAnchor = new THREE.Object3D();
+let head = null;           // container for the person model
+let headMaterials = [];    // per-mesh materials whose uProgress drives paint-in
+let flowerAnchor = null;   // empty pulled from the GLB; flower flies + faces here
+
+// Edit mode: force the head fully visible and enable the drag gizmo so the
+// person model can be scaled/positioned/rotated by hand.
+const headEdit = { show: false, mode: "translate" };
 
 // ---------------------------------------------------------------------------
 // Load the flower and clone it into 3 instances
@@ -359,62 +366,92 @@ function applyFlowerSpacing() {
 }
 
 // ---------------------------------------------------------------------------
-// Placeholder head with a "paint-in" dissolve shader (swap for head.glb later)
+// Person model — unlit (MeshBasicMaterial, like the flowers) with a "paint-in"
+// dissolve injected into the fragment stage so the head still reveals gradually.
+// The GLB carries a "floweranchor" empty; the chosen flower flies to it and
+// takes its orientation so it faces along the anchor's local Z.
 // ---------------------------------------------------------------------------
-function makePlaceholderHead() {
-  const geo = new THREE.IcosahedronGeometry(1.1, 4);
-  headMaterial = new THREE.ShaderMaterial({
-    uniforms: {
-      uProgress: { value: 0 },
-      uColor: { value: new THREE.Color(0xe9d9c5) },
-      uLightDir: { value: new THREE.Vector3(2, 3, 4).normalize() },
-    },
-    vertexShader: /* glsl */`
-      varying vec3 vNormal;
-      varying vec3 vPos;
-      void main() {
-        vNormal = normalize(normalMatrix * normal);
-        vPos = position;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }
-    `,
-    fragmentShader: /* glsl */`
-      uniform float uProgress;
-      uniform vec3 uColor;
-      uniform vec3 uLightDir;
-      varying vec3 vNormal;
-      varying vec3 vPos;
-      // cheap value noise for a brushy reveal edge
-      float hash(vec3 p){ return fract(sin(dot(p, vec3(17.1,113.5,71.7)))*43758.5453); }
-      float noise(vec3 p){
-        vec3 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
-        float n=mix(mix(mix(hash(i),hash(i+vec3(1,0,0)),f.x),
-                        mix(hash(i+vec3(0,1,0)),hash(i+vec3(1,1,0)),f.x),f.y),
-                    mix(mix(hash(i+vec3(0,0,1)),hash(i+vec3(1,0,1)),f.x),
-                        mix(hash(i+vec3(0,1,1)),hash(i+vec3(1,1,1)),f.x),f.y),f.z);
-        return n;
-      }
-      void main(){
-        float n = noise(vPos * 3.0);
-        float edge = uProgress * 1.2 - 0.1;
-        if (n > edge) discard;                 // not yet painted
-        float rim = smoothstep(edge - 0.08, edge, n);
-        float light = max(dot(normalize(vNormal), uLightDir), 0.0) * 0.6 + 0.4;
-        vec3 col = mix(uColor, vec3(0.42,0.31,0.22), rim * 0.6) * light;
-        gl_FragColor = vec4(col, 1.0);
-      }
-    `,
-  });
-  const mesh = new THREE.Mesh(geo, headMaterial);
-  mesh.position.set(-2.2, 0.1, 0);   // left half of the page
-  mesh.visible = false;
-  scene.add(mesh);
+const personTex = new THREE.TextureLoader().load("./person%20model/base_color.png");
+personTex.colorSpace = THREE.SRGBColorSpace;
+personTex.flipY = false; // glTF UV convention
 
-  flowerAnchor.position.set(0.5, 0.9, 0.4); // "hair" spot, relative to head
-  mesh.add(flowerAnchor);
-  return mesh;
+// Unlit head material. uProgress (0 → 1) sweeps a simplex-noise dissolve edge
+// so texels reveal in a brushy front. Live uniform is stashed for per-frame use.
+function makeHeadMaterial(map) {
+  const mat = new THREE.MeshBasicMaterial({ map, side: THREE.DoubleSide });
+  const u = { uProgress: { value: 0 } };
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uProgress = u.uProgress;
+    shader.vertexShader =
+      "varying vec3 vObjPos;\n" +
+      shader.vertexShader.replace(
+        "#include <begin_vertex>",
+        "#include <begin_vertex>\n  vObjPos = position;"
+      );
+    shader.fragmentShader =
+      "uniform float uProgress;\nvarying vec3 vObjPos;\n" +
+      NOISE_GLSL +
+      shader.fragmentShader.replace(
+        "#include <map_fragment>",
+        /* glsl */`#include <map_fragment>
+        float _n = snoise(vObjPos * 3.0) * 0.5 + 0.5; // 0..1 brushy field
+        if (_n > uProgress * 1.2 - 0.1) discard;       // not yet painted in`
+      );
+  };
+  mat.userData.progressUniform = u.uProgress;
+  return mat;
 }
-head = makePlaceholderHead();
+
+head = new THREE.Group();
+head.position.set(-2.808, -1.588, 0);   // baked from the edit gizmo
+head.rotation.set(0, 0.421, 0);
+head.scale.setScalar(params.headScale);
+head.visible = false;
+scene.add(head);
+
+// Drag gizmo for hand-placing the person model. Hidden until "edit" is toggled.
+let headFolder = null; // GUI folder, wired below; refreshed as the gizmo drags
+const headGizmo = new TransformControls(camera, renderer.domElement);
+headGizmo.attach(head);
+headGizmo.setMode(headEdit.mode);
+headGizmo.enabled = false;
+headGizmo.visible = false;
+scene.add(headGizmo);
+// Mirror live drag changes back into the numeric GUI fields.
+headGizmo.addEventListener("objectChange", () => {
+  if (headFolder) headFolder.controllers.forEach((c) => c.updateDisplay());
+});
+
+function setHeadEdit(on) {
+  headEdit.show = on;
+  headGizmo.enabled = on;
+  headGizmo.visible = on;
+  if (on) {
+    head.visible = true; // reveal fully so it can be positioned
+    for (const m of headMaterials) m.userData.progressUniform.value = 1;
+  }
+}
+
+function logHeadTransform() {
+  const p = head.position, r = head.rotation, s = head.scale;
+  console.log(
+    `head.position.set(${p.x.toFixed(3)}, ${p.y.toFixed(3)}, ${p.z.toFixed(3)});\n` +
+    `head.rotation.set(${r.x.toFixed(3)}, ${r.y.toFixed(3)}, ${r.z.toFixed(3)});\n` +
+    `head.scale.set(${s.x.toFixed(3)}, ${s.y.toFixed(3)}, ${s.z.toFixed(3)});`
+  );
+}
+
+loader.load("./person%20model/person.glb", (gltf) => {
+  const model = gltf.scene;
+  model.traverse((o) => {
+    if (o.isMesh) {
+      o.material = makeHeadMaterial(personTex); // unlit + paint-in
+      headMaterials.push(o.material);
+    }
+    if (o.name && o.name.toLowerCase() === "floweranchor") flowerAnchor = o;
+  });
+  head.add(model);
+}, undefined, (err) => console.error("Failed to load person.glb:", err));
 
 // ---------------------------------------------------------------------------
 // Interaction — raycasting for hover/select
@@ -445,7 +482,7 @@ function flowerUnderPointer() {
 }
 
 window.addEventListener("pointermove", () => {
-  if (phase !== PHASE.CHOOSING) return;
+  if (phase !== PHASE.CHOOSING || headEdit.show) return;
   const f = flowerUnderPointer();
   hovered = f;
   if (f) {
@@ -457,7 +494,7 @@ window.addEventListener("pointermove", () => {
 });
 
 window.addEventListener("pointerdown", () => {
-  if (phase !== PHASE.CHOOSING) return;
+  if (phase !== PHASE.CHOOSING || headEdit.show) return;
   const f = flowerUnderPointer();
   if (!f) return;
   selected = f;
@@ -484,6 +521,28 @@ const clock = new THREE.Clock();
 const FLYIN_AXIS = new THREE.Vector3(0, 0, 1);
 const BLOOM_AXIS = new THREE.Vector3(0, 1, 0);
 const _spinQuat = new THREE.Quaternion();
+const _anchorScale = new THREE.Vector3();
+const _zero = new THREE.Vector3(0, 0, 0);
+const _identQuat = new THREE.Quaternion();
+
+// Ease the chosen flower toward its resting pose *inside the anchor's frame*:
+// local origin, identity rotation (so it faces along the anchor's Z), and the
+// requested world scale (divide out the anchor's world scale). Run every frame
+// from transition through portrait so the flower never freezes mid-flight.
+function settleFlowerOnAnchor(dt, lambda) {
+  if (!selected) return;
+  const k = 1 - Math.exp(-lambda * dt);
+  if (flowerAnchor && selected.group.parent === flowerAnchor) {
+    selected.group.position.lerp(_zero, k);
+    selected.group.quaternion.slerp(_identQuat, k);
+    flowerAnchor.getWorldScale(_anchorScale);
+    const target = params.flowerAttachScale / _anchorScale.x;
+    selected.group.scale.setScalar(damp(selected.group.scale.x, target, lambda, dt));
+  } else {
+    // No anchor loaded — just settle the world scale.
+    selected.group.scale.setScalar(damp(selected.group.scale.x, params.flowerAttachScale, lambda, dt));
+  }
+}
 
 function applySpin(f, angle, axis, worldSpace) {
   _spinQuat.setFromAxisAngle(axis, angle);
@@ -498,6 +557,12 @@ function damp(current, target, lambda, dt) {
 function animate() {
   const dt = Math.min(clock.getDelta(), 0.05);
   const elapsed = clock.getElapsedTime();
+
+  // While editing, keep the head fully painted-in and visible regardless of phase.
+  if (headEdit.show) {
+    head.visible = true;
+    for (const m of headMaterials) m.userData.progressUniform.value = 1;
+  }
 
   // --- Petal wobble: feed live uniforms to every flower material ---
   for (const f of flowers) {
@@ -554,13 +619,19 @@ function animate() {
     }
   }
 
-  // --- Phase 2: transition ---
+  // --- Phase 2: transition — the chosen flower eases into the anchor's frame ---
   if (phase === PHASE.TRANSITION) {
-    // keep selected flower open
-    setBloom(selected, damp(selected.current, 0, params.bloomSpeed, dt));
+    // keep the selected flower open
     selected.current = damp(selected.current, 0, params.bloomSpeed, dt);
+    setBloom(selected, selected.current);
 
-    // scale unselected flowers to 0
+    // Parent to the anchor up front so the flower eases toward a *fixed* local
+    // pose — nothing re-parents at the phase boundary, so nothing snaps.
+    if (flowerAnchor && selected.group.parent !== flowerAnchor) {
+      flowerAnchor.attach(selected.group);
+    }
+
+    // shrink the unselected flowers away
     let othersGone = true;
     for (const f of flowers) {
       if (f === selected) continue;
@@ -569,41 +640,40 @@ function animate() {
       if (s > 0.02) othersGone = false;
     }
 
-    // paint in the head
+    // paint in the head once the others are gone
     if (othersGone) {
       paintProgress = Math.min(1, paintProgress + params.paintSpeed * dt);
-      headMaterial.uniforms.uProgress.value = paintProgress;
+      for (const m of headMaterials) m.userData.progressUniform.value = paintProgress;
     }
 
-    // move selected flower toward the hair anchor (world position)
-    const targetPos = new THREE.Vector3();
-    flowerAnchor.getWorldPosition(targetPos);
-    selected.group.position.lerp(targetPos, 1 - Math.exp(-3 * dt));
-    const s = damp(selected.group.scale.x, 0.5, 4, dt);
-    selected.group.scale.setScalar(s);
-
-    // slide camera to frame the head on the left
-    camera.position.x = damp(camera.position.x, -1.1, 3, dt);
+    settleFlowerOnAnchor(dt, 3);
 
     if (paintProgress >= 0.999) {
       phase = PHASE.PORTRAIT;
       poemEl.classList.add("active");
       poemEl.setAttribute("aria-hidden", "false");
-      // parent the flower to the head so it tracks orbit
-      head.attach(selected.group);
     }
   }
 
-  // --- Phase 3: soft camera orbit driven by mouse ---
-  if (phase === PHASE.PORTRAIT) {
-    const targetX = -1.1 + mouseNDC.x * params.orbitAmount;
+  // --- Phase 3: keep settling so the flower finishes easing in (never freezes
+  // mid-flight) and flowerAttachScale stays live. ---
+  if (phase === PHASE.PORTRAIT && selected) {
+    settleFlowerOnAnchor(dt, 6);
+  }
+
+  // --- Camera framing ---
+  // The camera aims at a FIXED point in every phase, never at the head. Tracking
+  // the head re-centered it on screen and undid any gizmo placement; with a
+  // stable aim the head's world position maps directly to where it appears, so
+  // you can park it in the layout (e.g. the left box) and it stays put.
+  if (phase === PHASE.PORTRAIT && !headEdit.show) {
+    // Soft mouse-driven orbit for a little parallax; base position stays centered.
+    const targetX = mouseNDC.x * params.orbitAmount;
     const targetY = 0.4 + mouseNDC.y * params.orbitAmount * 0.6;
     camera.position.x = damp(camera.position.x, targetX, 3, dt);
     camera.position.y = damp(camera.position.y, targetY, 3, dt);
-    camera.lookAt(head.position);
-  } else {
-    camera.lookAt(0, 0.2, 0);
   }
+  camera.lookAt(0, 0.2, 0);
 
   renderer.render(scene, camera);
   requestAnimationFrame(animate);
@@ -620,8 +690,24 @@ gui.add(params, "bloomSpeed", 1, 15, 0.1);
 gui.add(params, "flowerSpacing", 0, 2.5, 0.01).onChange(applyFlowerSpacing);
 gui.add(params, "closedShrink", 0.5, 1, 0.01);
 gui.add(params, "openScale", 0.8, 1.8, 0.01);
+gui.add(params, "flowerAttachScale", 0.05, 1, 0.01);
 gui.add(params, "orbitAmount", 0, 0.5, 0.01);
 gui.add(params, "paintSpeed", 0.1, 2, 0.05);
+
+// Person model placement — draggable gizmo + exact numeric fields.
+headFolder = gui.addFolder("person model");
+headFolder.add(headEdit, "show").name("edit (show + gizmo)").onChange(setHeadEdit);
+headFolder.add(headEdit, "mode", ["translate", "rotate", "scale"]).name("gizmo mode")
+  .onChange((m) => headGizmo.setMode(m));
+headFolder.add(head.position, "x", -8, 8, 0.01).name("pos x").listen();
+headFolder.add(head.position, "y", -8, 8, 0.01).name("pos y").listen();
+headFolder.add(head.position, "z", -8, 8, 0.01).name("pos z").listen();
+headFolder.add(head.rotation, "x", -Math.PI, Math.PI, 0.01).name("rot x").listen();
+headFolder.add(head.rotation, "y", -Math.PI, Math.PI, 0.01).name("rot y").listen();
+headFolder.add(head.rotation, "z", -Math.PI, Math.PI, 0.01).name("rot z").listen();
+headFolder.add(params, "headScale", 0.05, 5, 0.01).name("scale (uniform)")
+  .onChange((v) => head.scale.setScalar(v));
+headFolder.add({ log: logHeadTransform }, "log").name("log transform → console");
 
 const motion = gui.addFolder("petal motion");
 motion.add(params, "noiseFreq", 0.2, 6, 0.05);
@@ -630,6 +716,7 @@ motion.add(params, "noiseOpen", 0, 0.2, 0.005);
 motion.add(params, "bloomSpin", 0, Math.PI, 0.05);
 motion.add(params, "bobAmount", 0, 0.3, 0.005);
 motion.add(params, "bobSpeed", 0, 4, 0.05);
+motion.close();
 
 function updateBackside() {
   backsideUniforms.uBacksideOn.value = params.backsideOverlay ? 1 : 0;
@@ -644,6 +731,7 @@ back.add(params, "backsideOverlay").onChange(updateBackside);
 back.add(params, "backsideFace", ["back", "front"]).onChange(updateBackside);
 back.addColor(params, "backsideColor").onChange(updateBackside);
 back.add(params, "backsideStrength", 0, 1, 0.02).onChange(updateBackside);
+back.close();
 
 window.addEventListener("resize", () => {
   camera.aspect = window.innerWidth / window.innerHeight;
