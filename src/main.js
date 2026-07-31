@@ -6,7 +6,6 @@ import GUI from "lil-gui";
 // Tunable visual parameters
 // ---------------------------------------------------------------------------
 const params = {
-  enableDepthShading: true, // master toggle: AO/shading vs. flat painted look
   aoIntensity: 0.4,         // strength of shading darkening (0..1)
   shadingSoftness: 1.0,     // runtime light wrap when no AO map is present
   bloomSpeed: 2.5,          // how fast a flower blooms/closes on hover
@@ -18,20 +17,19 @@ const params = {
   noiseFreq: 0.2,           // spatial frequency of the petal-wobble noise
   noiseClosed: 0.03,        // wobble amplitude while a flower is closed
   noiseOpen: 0.04,          // wobble amplitude while a flower is bloomed
-  introStagger: 0.2,       // seconds between successive flowers entering
-  introSpinTurns: 0.8,      // full rotations each flower does while flying in
   bloomSpin: 1.15,           // radians a flower turns as it blooms (stops when open)
   backsideOverlay: true,   // tint one side of the petals
   backsideFace: "back",     // winding flip: swap if the tint lands on the wrong side
   backsideColor: "#8a2f2f", // color blended into the tinted-side texture
   backsideStrength: 0.6,    // peak tint strength at full closed/open (0..1)
-  editCurve: false,         // show the draggable intro-curve editor
-  curveType: "catmullrom",  // spline type: centripetal | chordal | catmullrom
-  curveTension: 0.75,       // corner roundness (only used by "catmullrom" type)
 };
 
-// Intro fly-in tuning
-const INTRO_TRAVEL = 3.8;   // seconds each flower spends travelling the path
+// Intro fly-in tuning (finalized — no longer GUI-exposed)
+const INTRO_TRAVEL = 3.8;      // seconds each flower spends travelling the path
+const INTRO_STAGGER = 0.2;     // seconds between successive flowers entering
+const INTRO_SPIN_TURNS = 0.8;  // full rotations each flower does while flying in
+const CURVE_TYPE = "catmullrom"; // intro spline type
+const CURVE_TENSION = 0.75;      // intro spline corner roundness
 
 const POPUP_TEXT = [
   "for the quiet days",
@@ -65,18 +63,17 @@ fill.position.set(-3, 1, 2);
 scene.add(fill);
 
 function applyShadingParams() {
-  const on = params.enableDepthShading;
   // Without AO maps, "depth shading" == directional lighting contrast.
-  hemi.intensity = on ? THREE.MathUtils.lerp(1.4, 1.0, params.shadingSoftness) : 2.0;
-  key.intensity = on ? 1.2 * (0.5 + params.aoIntensity) : 0.0;
-  fill.intensity = on ? 0.4 : 0.0;
+  hemi.intensity = THREE.MathUtils.lerp(1.4, 1.0, params.shadingSoftness);
+  key.intensity = 1.2 * (0.5 + params.aoIntensity);
+  fill.intensity = 0.4;
 }
 applyShadingParams();
 
 // ---------------------------------------------------------------------------
 // State machine
 // ---------------------------------------------------------------------------
-const PHASE = { INTRO: "intro", CHOOSING: "choosing", TRANSITION: "transition", PORTRAIT: "portrait", EDIT: "edit" };
+const PHASE = { INTRO: "intro", CHOOSING: "choosing", TRANSITION: "transition", PORTRAIT: "portrait" };
 let phase = PHASE.INTRO;
 
 const flowers = [];        // { group, morphMeshes[], target, current, homePos, homeScale }
@@ -303,8 +300,7 @@ let introStopT = [];
 let introStopS = [];
 const introTmp = new THREE.Vector3();
 
-// The 5 tunable path points (the tail 3 are pinned to the flower homes). Edit
-// these live with the curve editor, then bake in whatever gets logged.
+// The 5 baked path points (the tail 3 are pinned to the flower homes at runtime).
 const introPathPoints = [
   new THREE.Vector3(0.800, 5.500, 0.000),   // enters off the top
   new THREE.Vector3(2.700, 3.200, 0.000),   // bulges right
@@ -323,8 +319,8 @@ function buildIntroCurve() {
       hp[2].clone(), // right flower home
     ],
     false,
-    params.curveType,     // "chordal" flows through the corners more gently
-    params.curveTension,
+    CURVE_TYPE,
+    CURVE_TENSION,
   );
   // 8 control points → 7 segments; CatmullRom passes through point i at t=i/7,
   // so the three homes sit at these curve parameters (indices 5, 6, 7).
@@ -347,129 +343,6 @@ function buildIntroCurve() {
 // Smooth accel + decel so each flower eases off the top and settles gently.
 const easeInOutCubic = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
 const clamp01 = (x) => Math.min(1, Math.max(0, x));
-
-// ---------------------------------------------------------------------------
-// Curve editor — drag the red handles to reshape the entrance path, then
-// "log points → console" and hand me the output to bake in. The 3 blue markers
-// are the flower homes (pinned, not draggable). Toggle via the GUI.
-// ---------------------------------------------------------------------------
-let editorGroup = null;
-let curveLine = null;
-let handleMeshes = [];
-let dragHandle = null;
-const dragPlane = new THREE.Plane();
-const dragPoint = new THREE.Vector3();
-
-function buildEditor() {
-  editorGroup = new THREE.Group();
-
-  const geo = new THREE.BufferGeometry().setFromPoints(introCurve.getPoints(200));
-  curveLine = new THREE.Line(
-    geo,
-    new THREE.LineBasicMaterial({ color: 0x111111, depthTest: false, depthWrite: false, transparent: true })
-  );
-  curveLine.renderOrder = 9997;
-  editorGroup.add(curveLine);
-
-  // Always-on-top material so handles stay clickable/visible over the flowers,
-  // which render in the later transparent pass and would otherwise cover them.
-  const onTop = (color) =>
-    new THREE.MeshBasicMaterial({ color, depthTest: false, depthWrite: false, transparent: true });
-
-  // Draggable handles for the 5 path points
-  handleMeshes = introPathPoints.map((p, i) => {
-    const m = new THREE.Mesh(new THREE.SphereGeometry(0.13, 20, 20), onTop(0xff3b3b));
-    m.position.copy(p);
-    m.renderOrder = 9999;
-    m.userData.pathIndex = i;
-    editorGroup.add(m);
-    return m;
-  });
-
-  // Pinned markers for the flower home points (tail of the curve)
-  for (const f of flowers) {
-    const m = new THREE.Mesh(new THREE.SphereGeometry(0.09, 16, 16), onTop(0x3b7bff));
-    m.position.copy(f.homePos);
-    m.renderOrder = 9998;
-    editorGroup.add(m);
-  }
-
-  scene.add(editorGroup);
-}
-
-function refreshEditor() {
-  buildIntroCurve(); // rebuild curve + arc-length table from introPathPoints
-  curveLine.geometry.setFromPoints(introCurve.getPoints(200));
-  handleMeshes.forEach((m, i) => m.position.copy(introPathPoints[i]));
-}
-
-// Re-derive the curve after a smoothness setting changes (updates the preview
-// line too, if the editor is open).
-function updateCurveSettings() {
-  if (!introCurve) return;
-  buildIntroCurve();
-  if (curveLine) curveLine.geometry.setFromPoints(introCurve.getPoints(200));
-}
-
-function setEditMode(on) {
-  if (on) {
-    if (!introCurve) { console.warn("Flowers not loaded yet — try again in a moment."); return; }
-    if (!editorGroup) buildEditor();
-    editorGroup.visible = true;
-    phase = PHASE.EDIT;
-    camera.position.set(0, 0.4, 6); // freeze default framing so drag maps cleanly
-    for (const f of flowers) {
-      f.group.position.copy(f.homePos);
-      f.current = 1;
-      setBloom(f, 1);
-      f.group.scale.setScalar(params.closedShrink);
-    }
-  } else {
-    if (editorGroup) editorGroup.visible = false;
-    if (phase === PHASE.EDIT) phase = PHASE.CHOOSING;
-  }
-}
-
-function replayIntro() {
-  if (!introCurve) return;
-  params.editCurve = false;
-  if (editorGroup) editorGroup.visible = false;
-  introTime = 0;
-  for (const f of flowers) { f.current = 1; setBloom(f, 1); }
-  phase = PHASE.INTRO;
-  gui.controllersRecursive().forEach((c) => c.updateDisplay());
-}
-
-function logCurvePoints() {
-  const body = introPathPoints
-    .map((p) => `  new THREE.Vector3(${p.x.toFixed(3)}, ${p.y.toFixed(3)}, ${p.z.toFixed(3)}),`)
-    .join("\n");
-  console.log("introPathPoints:\n[\n" + body + "\n]");
-}
-
-// Drag handling (only active in EDIT phase; pointer NDC updated by the global
-// pointermove listener above).
-window.addEventListener("pointerdown", () => {
-  if (phase !== PHASE.EDIT) return;
-  raycaster.setFromCamera(pointer, camera);
-  const hits = raycaster.intersectObjects(handleMeshes, false);
-  if (hits.length) {
-    dragHandle = hits[0].object;
-    // Constrain motion to the world XY plane at the handle's own depth.
-    dragPlane.setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 0, 1), dragHandle.position);
-  }
-});
-window.addEventListener("pointermove", () => {
-  if (phase !== PHASE.EDIT || !dragHandle) return;
-  raycaster.setFromCamera(pointer, camera);
-  if (raycaster.ray.intersectPlane(dragPlane, dragPoint)) {
-    const p = introPathPoints[dragHandle.userData.pathIndex];
-    p.x = dragPoint.x;
-    p.y = dragPoint.y; // z stays as authored
-    refreshEditor();
-  }
-});
-window.addEventListener("pointerup", () => { dragHandle = null; });
 
 // Reposition the outer flowers when the spacing slider changes (phase 1 only —
 // after selection the flowers fly to the head and are no longer laid out here).
@@ -640,14 +513,14 @@ function animate() {
     for (const f of flowers) {
       // Right flower (index 2) enters first, then center, then left.
       const order = 2 - f.index;
-      const local = clamp01((introTime - order * params.introStagger) / INTRO_TRAVEL);
+      const local = clamp01((introTime - order * INTRO_STAGGER) / INTRO_TRAVEL);
       const e = easeInOutCubic(local); // shared easing → position + spin stay in sync
       // Travel by arc-length fraction → even speed along the whole path.
       introCurve.getPointAt(e * introStopS[f.index], introTmp);
       f.group.position.copy(introTmp);
       f.group.scale.setScalar(params.closedShrink); // stay closed while flying
       // Eased spin, decelerating to the resting pose on landing.
-      applySpin(f, params.introSpinTurns * Math.PI * 2 * (1 - e), FLYIN_AXIS, true);
+      applySpin(f, INTRO_SPIN_TURNS * Math.PI * 2 * (1 - e), FLYIN_AXIS, true);
       if (local < 1) allLanded = false;
     }
     if (allLanded) {
@@ -732,7 +605,6 @@ animate();
 // Note: GUI labels are left as the raw property names (no .name() overrides) so
 // the control label always matches the params key it maps to.
 const gui = new GUI({ title: "Flowerpot params" });
-gui.add(params, "enableDepthShading").onChange(applyShadingParams);
 gui.add(params, "bloomSpeed", 1, 15, 0.1);
 gui.add(params, "flowerSpacing", 0, 2.5, 0.01).onChange(applyFlowerSpacing);
 gui.add(params, "closedShrink", 0.5, 1, 0.01);
@@ -744,8 +616,6 @@ const motion = gui.addFolder("petal motion");
 motion.add(params, "noiseFreq", 0.2, 6, 0.05);
 motion.add(params, "noiseClosed", 0, 0.2, 0.005);
 motion.add(params, "noiseOpen", 0, 0.2, 0.005);
-motion.add(params, "introStagger", 0, 2, 0.05);
-motion.add(params, "introSpinTurns", 0, 5, 0.1);
 motion.add(params, "bloomSpin", 0, Math.PI, 0.05);
 
 function updateBackside() {
@@ -761,13 +631,6 @@ back.add(params, "backsideOverlay").onChange(updateBackside);
 back.add(params, "backsideFace", ["back", "front"]).onChange(updateBackside);
 back.addColor(params, "backsideColor").onChange(updateBackside);
 back.add(params, "backsideStrength", 0, 1, 0.02).onChange(updateBackside);
-
-const editor = gui.addFolder("curve editor");
-editor.add(params, "editCurve").onChange(setEditMode);
-editor.add(params, "curveType", ["centripetal", "chordal", "catmullrom"]).onChange(updateCurveSettings);
-editor.add(params, "curveTension", 0, 1, 0.05).onChange(updateCurveSettings);
-editor.add({ replayIntro }, "replayIntro");
-editor.add({ logCurvePoints }, "logCurvePoints");
 
 window.addEventListener("resize", () => {
   camera.aspect = window.innerWidth / window.innerHeight;
