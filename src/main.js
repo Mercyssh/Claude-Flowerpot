@@ -21,8 +21,9 @@ const params = {
   introStagger: 0.2,       // seconds between successive flowers entering
   introSpinTurns: 0.8,      // full rotations each flower does while flying in
   bloomSpin: 1.15,           // radians a flower turns as it blooms (stops when open)
-  backsideOverlay: false,   // tint the back faces of the petals
-  backsideColor: "#8a2f2f", // color multiplied into the backside texture
+  backsideOverlay: false,   // tint one side of the petals
+  backsideFace: "back",     // which faces to tint: "back" or "front"
+  backsideColor: "#8a2f2f", // color multiplied into the tinted-side texture
   backsideStrength: 0.6,    // how strongly the tint is applied (0..1)
   editCurve: false,         // show the draggable intro-curve editor
   curveType: "catmullrom",  // spline type: centripetal | chordal | catmullrom
@@ -152,6 +153,7 @@ const NOISE_GLSL = /* glsl */`
 // faces multiply their texture by uBacksideColor, blended by uBacksideStrength.
 const backsideUniforms = {
   uBacksideOn: { value: 0 },
+  uBacksideFront: { value: 0 }, // 1 = tint front faces instead of back faces
   uBacksideColor: { value: new THREE.Color(0x8a2f2f) },
   uBacksideStrength: { value: 0.6 },
 };
@@ -180,12 +182,14 @@ function makeFlowerMaterial() {
     // Multiply the tint into back-facing fragments only.
     shader.fragmentShader =
       "uniform float uBacksideOn;\n" +
+      "uniform float uBacksideFront;\n" +
       "uniform vec3 uBacksideColor;\n" +
       "uniform float uBacksideStrength;\n" +
       shader.fragmentShader.replace(
         "#include <map_fragment>",
         /* glsl */`#include <map_fragment>
-        if (!gl_FrontFacing) {
+        bool _tintThisFace = (uBacksideFront > 0.5) ? gl_FrontFacing : !gl_FrontFacing;
+        if (_tintThisFace) {
           diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * uBacksideColor,
                                  uBacksideStrength * uBacksideOn);
         }`
@@ -716,42 +720,45 @@ animate();
 // ---------------------------------------------------------------------------
 // GUI + resize
 // ---------------------------------------------------------------------------
+// Note: GUI labels are left as the raw property names (no .name() overrides) so
+// the control label always matches the params key it maps to.
 const gui = new GUI({ title: "Flowerpot params" });
-gui.add(params, "enableDepthShading").name("depth shading").onChange(applyShadingParams);
-gui.add(params, "bloomSpeed", 1, 15, 0.1).name("bloom speed");
-gui.add(params, "flowerSpacing", 0, 2.5, 0.01).name("flower spacing").onChange(applyFlowerSpacing);
-gui.add(params, "closedShrink", 0.5, 1, 0.01).name("closed shrink");
-gui.add(params, "openScale", 0.8, 1.8, 0.01).name("bloom scale");
-gui.add(params, "orbitAmount", 0, 0.5, 0.01).name("orbit amount");
-gui.add(params, "paintSpeed", 0.1, 2, 0.05).name("paint speed");
+gui.add(params, "enableDepthShading").onChange(applyShadingParams);
+gui.add(params, "bloomSpeed", 1, 15, 0.1);
+gui.add(params, "flowerSpacing", 0, 2.5, 0.01).onChange(applyFlowerSpacing);
+gui.add(params, "closedShrink", 0.5, 1, 0.01);
+gui.add(params, "openScale", 0.8, 1.8, 0.01);
+gui.add(params, "orbitAmount", 0, 0.5, 0.01);
+gui.add(params, "paintSpeed", 0.1, 2, 0.05);
 
 const motion = gui.addFolder("petal motion");
-motion.add(params, "noiseFreq", 0.2, 6, 0.05).name("wobble scale");
-motion.add(params, "noiseClosed", 0, 0.2, 0.005).name("wobble (closed)");
-motion.add(params, "noiseOpen", 0, 0.2, 0.005).name("wobble (bloomed)");
-motion.add(params, "introStagger", 0, 2, 0.05).name("fly-in stagger");
-motion.add(params, "introSpinTurns", 0, 5, 0.1).name("fly-in spins");
-motion.add(params, "bloomSpin", 0, Math.PI, 0.05).name("bloom spin");
+motion.add(params, "noiseFreq", 0.2, 6, 0.05);
+motion.add(params, "noiseClosed", 0, 0.2, 0.005);
+motion.add(params, "noiseOpen", 0, 0.2, 0.005);
+motion.add(params, "introStagger", 0, 2, 0.05);
+motion.add(params, "introSpinTurns", 0, 5, 0.1);
+motion.add(params, "bloomSpin", 0, Math.PI, 0.05);
 
 function updateBackside() {
   backsideUniforms.uBacksideOn.value = params.backsideOverlay ? 1 : 0;
+  backsideUniforms.uBacksideFront.value = params.backsideFace === "front" ? 1 : 0;
   backsideUniforms.uBacksideColor.value.set(params.backsideColor);
   backsideUniforms.uBacksideStrength.value = params.backsideStrength;
 }
 updateBackside();
 
 const back = gui.addFolder("backside overlay");
-back.add(params, "backsideOverlay").name("enabled").onChange(updateBackside);
-back.addColor(params, "backsideColor").name("tint color").onChange(updateBackside);
-back.add(params, "backsideStrength", 0, 1, 0.02).name("strength").onChange(updateBackside);
+back.add(params, "backsideOverlay").onChange(updateBackside);
+back.add(params, "backsideFace", ["back", "front"]).onChange(updateBackside);
+back.addColor(params, "backsideColor").onChange(updateBackside);
+back.add(params, "backsideStrength", 0, 1, 0.02).onChange(updateBackside);
 
 const editor = gui.addFolder("curve editor");
-editor.add(params, "editCurve").name("edit mode").onChange(setEditMode);
-editor.add(params, "curveType", ["centripetal", "chordal", "catmullrom"])
-  .name("smoothness type").onChange(updateCurveSettings);
-editor.add(params, "curveTension", 0, 1, 0.05).name("tension (catmullrom)").onChange(updateCurveSettings);
-editor.add({ replay: replayIntro }, "replay").name("replay intro");
-editor.add({ log: logCurvePoints }, "log").name("log points → console");
+editor.add(params, "editCurve").onChange(setEditMode);
+editor.add(params, "curveType", ["centripetal", "chordal", "catmullrom"]).onChange(updateCurveSettings);
+editor.add(params, "curveTension", 0, 1, 0.05).onChange(updateCurveSettings);
+editor.add({ replayIntro }, "replayIntro");
+editor.add({ logCurvePoints }, "logCurvePoints");
 
 window.addEventListener("resize", () => {
   camera.aspect = window.innerWidth / window.innerHeight;
