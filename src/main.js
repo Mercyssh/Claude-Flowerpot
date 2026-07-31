@@ -18,8 +18,11 @@ const params = {
   noiseFreq: 0.2,           // spatial frequency of the petal-wobble noise
   noiseClosed: 0.03,        // wobble amplitude while a flower is closed
   noiseOpen: 0.04,          // wobble amplitude while a flower is bloomed
-  introSpinTurns: 0.5,      // full rotations each flower does while flying in
-  bloomSpin: 0.6,           // radians a flower turns as it blooms (stops when open)
+  introSpinTurns: 0.8,      // full rotations each flower does while flying in
+  bloomSpin: 1.15,           // radians a flower turns as it blooms (stops when open)
+  backsideOverlay: false,   // tint the back faces of the petals
+  backsideColor: "#8a2f2f", // color multiplied into the backside texture
+  backsideStrength: 0.6,    // how strongly the tint is applied (0..1)
   editCurve: false,         // show the draggable intro-curve editor
   curveType: "catmullrom",  // spline type: centripetal | chordal | catmullrom
   curveTension: 0.75,       // corner roundness (only used by "catmullrom" type)
@@ -145,6 +148,14 @@ const NOISE_GLSL = /* glsl */`
   }
 `;
 
+// Backside tint — shared across every flower material (global controls). Back
+// faces multiply their texture by uBacksideColor, blended by uBacksideStrength.
+const backsideUniforms = {
+  uBacksideOn: { value: 0 },
+  uBacksideColor: { value: new THREE.Color(0x8a2f2f) },
+  uBacksideStrength: { value: 0.6 },
+};
+
 // Build a flower material that injects the noise wobble into the vertex stage.
 // uBloom (1 = closed, 0 = open) selects between the closed/open amplitudes so
 // each instance breathes independently. Returns the material; its live uniforms
@@ -164,7 +175,22 @@ function makeFlowerMaterial() {
     uNoiseAmpOpen: { value: params.noiseOpen },
   };
   mat.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, u);
+    Object.assign(shader.uniforms, u, backsideUniforms);
+
+    // Multiply the tint into back-facing fragments only.
+    shader.fragmentShader =
+      "uniform float uBacksideOn;\n" +
+      "uniform vec3 uBacksideColor;\n" +
+      "uniform float uBacksideStrength;\n" +
+      shader.fragmentShader.replace(
+        "#include <map_fragment>",
+        /* glsl */`#include <map_fragment>
+        if (!gl_FrontFacing) {
+          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * uBacksideColor,
+                                 uBacksideStrength * uBacksideOn);
+        }`
+      );
+
     shader.vertexShader =
       "uniform float uTime;\n" +
       "uniform float uBloom;\n" +
@@ -705,6 +731,18 @@ motion.add(params, "noiseClosed", 0, 0.2, 0.005).name("wobble (closed)");
 motion.add(params, "noiseOpen", 0, 0.2, 0.005).name("wobble (bloomed)");
 motion.add(params, "introSpinTurns", 0, 5, 0.1).name("fly-in spins");
 motion.add(params, "bloomSpin", 0, Math.PI, 0.05).name("bloom spin");
+
+function updateBackside() {
+  backsideUniforms.uBacksideOn.value = params.backsideOverlay ? 1 : 0;
+  backsideUniforms.uBacksideColor.value.set(params.backsideColor);
+  backsideUniforms.uBacksideStrength.value = params.backsideStrength;
+}
+updateBackside();
+
+const back = gui.addFolder("backside overlay");
+back.add(params, "backsideOverlay").name("enabled").onChange(updateBackside);
+back.addColor(params, "backsideColor").name("tint color").onChange(updateBackside);
+back.add(params, "backsideStrength", 0, 1, 0.02).name("strength").onChange(updateBackside);
 
 const editor = gui.addFolder("curve editor");
 editor.add(params, "editCurve").name("edit mode").onChange(setEditMode);
