@@ -14,8 +14,10 @@ const params = {
   openScale: 0.8,           // scale of a fully-bloomed flower
   flowerAttachScale: 0.35,  // scale the chosen flower shrinks to on the head
   flowerSpacing: 1.27,      // x-distance of the outer flowers from center
-  orbitAmount: 0.12,        // camera orbit magnitude in phase 2
+  orbitAmount: 0.35,        // portrait mouse-look: head rotation magnitude (radians)
   paintSpeed: 0.5,          // paint-in dissolve speed (progress/sec)
+  fovBefore: 45,            // camera FOV while choosing (before a flower is picked)
+  fovAfter: 22,             // camera FOV in the portrait (after selection)
   noiseFreq: 0.2,           // spatial frequency of the petal-wobble noise
   noiseClosed: 0.03,        // wobble amplitude while a flower is closed
   noiseOpen: 0.04,          // wobble amplitude while a flower is bloomed
@@ -26,7 +28,7 @@ const params = {
   backsideFace: "back",     // winding flip: swap if the tint lands on the wrong side
   backsideColor: "#8a2f2f", // color blended into the tinted-side texture
   backsideStrength: 0.6,    // peak tint strength at full closed/open (0..1)
-  headScale: 3.05,          // uniform scale of the person model
+  headScale: 3.9,           // uniform scale of the person model
 };
 
 // Intro fly-in tuning (finalized — no longer GUI-exposed)
@@ -403,8 +405,8 @@ function makeHeadMaterial(map) {
 }
 
 head = new THREE.Group();
-head.position.set(-2.808, -1.588, 0);   // baked from the edit gizmo
-head.rotation.set(0, 0.421, 0);
+head.position.set(-2.909, -2.230, -6.550);   // baked from the edit gizmo
+head.rotation.set(0.032, 0.280, -0.005);
 head.scale.setScalar(params.headScale);
 head.visible = false;
 scene.add(head);
@@ -524,6 +526,13 @@ const _spinQuat = new THREE.Quaternion();
 const _anchorScale = new THREE.Vector3();
 const _zero = new THREE.Vector3(0, 0, 0);
 const _identQuat = new THREE.Quaternion();
+
+// Portrait mouse-look: the head's orientation the instant the portrait begins,
+// plus scratch quats for composing the soft mouse-driven rotation on top of it.
+const headRestQuat = new THREE.Quaternion();
+const _headLookEuler = new THREE.Euler();
+const _headLookOffset = new THREE.Quaternion();
+const _headLookTarget = new THREE.Quaternion();
 
 // Ease the chosen flower toward its resting pose *inside the anchor's frame*:
 // local origin, identity rotation (so it faces along the anchor's Z), and the
@@ -652,6 +661,7 @@ function animate() {
       phase = PHASE.PORTRAIT;
       poemEl.classList.add("active");
       poemEl.setAttribute("aria-hidden", "false");
+      headRestQuat.copy(head.quaternion); // pose to compose the mouse-look on top of
     }
   }
 
@@ -659,21 +669,35 @@ function animate() {
   // mid-flight) and flowerAttachScale stays live. ---
   if (phase === PHASE.PORTRAIT && selected) {
     settleFlowerOnAnchor(dt, 6);
+
+    // Soft mouse-look: rotate the head (the attached flower rides along) around
+    // its resting pose — yaw from mouse X, a gentler pitch from mouse Y.
+    if (!headEdit.show) {
+      _headLookEuler.set(
+        mouseNDC.y * params.orbitAmount * 0.6,
+        mouseNDC.x * params.orbitAmount,
+        0,
+        "YXZ",
+      );
+      _headLookOffset.setFromEuler(_headLookEuler);
+      _headLookTarget.copy(headRestQuat).multiply(_headLookOffset);
+      head.quaternion.slerp(_headLookTarget, 1 - Math.exp(-4 * dt));
+    }
   }
 
   // --- Camera framing ---
-  // The camera aims at a FIXED point in every phase, never at the head. Tracking
-  // the head re-centered it on screen and undid any gizmo placement; with a
-  // stable aim the head's world position maps directly to where it appears, so
-  // you can park it in the layout (e.g. the left box) and it stays put.
-  if (phase === PHASE.PORTRAIT && !headEdit.show) {
-    // Soft mouse-driven orbit for a little parallax; base position stays centered.
-    const targetX = mouseNDC.x * params.orbitAmount;
-    const targetY = 0.4 + mouseNDC.y * params.orbitAmount * 0.6;
-    camera.position.x = damp(camera.position.x, targetX, 3, dt);
-    camera.position.y = damp(camera.position.y, targetY, 3, dt);
-  }
+  // The camera is fully static and always aims at a FIXED point. In the portrait,
+  // the mouse rotates the head instead of orbiting the camera (see above), so the
+  // head's world position maps directly to where it appears and stays put.
   camera.lookAt(0, 0.2, 0);
+
+  // Ease the FOV toward the phase's target (before vs after a flower is chosen).
+  const targetFov = (phase === PHASE.TRANSITION || phase === PHASE.PORTRAIT)
+    ? params.fovAfter : params.fovBefore;
+  if (Math.abs(camera.fov - targetFov) > 0.001) {
+    camera.fov = damp(camera.fov, targetFov, 3, dt);
+    camera.updateProjectionMatrix();
+  }
 
   renderer.render(scene, camera);
   requestAnimationFrame(animate);
@@ -693,6 +717,10 @@ gui.add(params, "openScale", 0.8, 1.8, 0.01);
 gui.add(params, "flowerAttachScale", 0.05, 1, 0.01);
 gui.add(params, "orbitAmount", 0, 0.5, 0.01);
 gui.add(params, "paintSpeed", 0.1, 2, 0.05);
+
+const cam = gui.addFolder("camera");
+cam.add(params, "fovBefore", 10, 90, 1).name("fov (before select)");
+cam.add(params, "fovAfter", 10, 90, 1).name("fov (after select)");
 
 // Person model placement — draggable gizmo + exact numeric fields.
 headFolder = gui.addFolder("person model");
