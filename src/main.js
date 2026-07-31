@@ -16,7 +16,7 @@ const params = {
   flowerSpacing: 1.27,      // x-distance of the outer flowers from center
   orbitAmount: 0.35,        // portrait mouse-look: head rotation magnitude (radians)
   paintSpeed: 0.3,          // paint-in dissolve speed (progress/sec)
-  flowerSnapSpeed: 0.3,     // flower-snap speed (progress/sec); matches paintSpeed by default
+  flowerSnapSpeed: 0.25,     // flower-snap speed (progress/sec); matches paintSpeed by default
   appearDir: "back",          // direction the paint stroke travels across the head
   appearNoiseScale: 2.0,    // grain of the brush streaks (higher = finer bristles)
   appearJitter: 0.35,       // how ragged/broken the wet paint front is (0 = clean wipe)
@@ -34,6 +34,10 @@ const params = {
   backsideColor: "#8a2f2f", // color blended into the tinted-side texture
   backsideStrength: 0.6,    // peak tint strength at full closed/open (0..1)
   headScale: 3.9,           // uniform scale of the person model
+  personBobAmount: 0.04,    // vertical bob height of the person model (world units)
+  personBobSpeed: 0.9,      // vertical bob frequency of the person (radians/sec)
+  personInvertX: true,      // invert mouse-look tilt (X axis): head tilts away from cursor
+  personInvertY: false,      // invert mouse-look turn (Y axis): head turns away from cursor
 };
 
 // Paint-stroke travel directions (object space) for the head reveal.
@@ -599,6 +603,10 @@ const _spinQuat = new THREE.Quaternion();
 // Portrait mouse-look: the head's orientation the instant the portrait begins,
 // plus scratch quats for composing the soft mouse-driven rotation on top of it.
 const headRestQuat = new THREE.Quaternion();
+// Person bob is applied as a delta on top of head.position.y so it never fights
+// the edit gizmo / numeric fields (which write the *base* y). We remove last
+// frame's offset before adding this frame's, keeping the base recoverable.
+let personBobOffset = 0;
 const _headLookEuler = new THREE.Euler();
 const _headLookOffset = new THREE.Quaternion();
 const _headLookTarget = new THREE.Quaternion();
@@ -781,8 +789,8 @@ function animate() {
   // the head can be rotated while it's still painting in — not only afterwards.
   if ((phase === PHASE.TRANSITION || phase === PHASE.PORTRAIT) && !headEdit.show) {
     _headLookEuler.set(
-      mouseNDC.y * params.orbitAmount * 0.6,
-      mouseNDC.x * params.orbitAmount,
+      (params.personInvertX ? -1 : 1) * mouseNDC.y * params.orbitAmount * 0.6,
+      (params.personInvertY ? -1 : 1) * mouseNDC.x * params.orbitAmount,
       0,
       "YXZ",
     );
@@ -790,6 +798,14 @@ function animate() {
     _headLookTarget.copy(headRestQuat).multiply(_headLookOffset);
     head.quaternion.slerp(_headLookTarget, 1 - Math.exp(-4 * dt));
   }
+
+  // Gentle vertical bob for the person. Disabled during edit so the gizmo/GUI
+  // see a clean base y; the delta is peeled off first so the base is preserved.
+  head.position.y -= personBobOffset;
+  personBobOffset = headEdit.show
+    ? 0
+    : Math.sin(elapsed * params.personBobSpeed) * params.personBobAmount;
+  head.position.y += personBobOffset;
 
   // --- Camera framing ---
   // The camera is fully static and always aims at a FIXED point. In the portrait,
@@ -851,6 +867,10 @@ headFolder.add(head.rotation, "y", -Math.PI, Math.PI, 0.01).name("rot y").listen
 headFolder.add(head.rotation, "z", -Math.PI, Math.PI, 0.01).name("rot z").listen();
 headFolder.add(params, "headScale", 0.05, 5, 0.01).name("scale (uniform)")
   .onChange((v) => head.scale.setScalar(v));
+headFolder.add(params, "personBobAmount", 0, 0.4, 0.005).name("bob amount");
+headFolder.add(params, "personBobSpeed", 0, 4, 0.05).name("bob speed");
+headFolder.add(params, "personInvertX").name("invert mouse X");
+headFolder.add(params, "personInvertY").name("invert mouse Y");
 headFolder.add({ log: logHeadTransform }, "log").name("log transform → console");
 headFolder.close();
 
