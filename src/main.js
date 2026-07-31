@@ -535,6 +535,13 @@ const popup = document.getElementById("popup");
 const poemEl = document.getElementById("poem");
 const bgText = document.getElementById("bg-text");
 
+// Hover popup follow behaviour.
+//   POPUP_FOLLOW — 0..1 easing per frame toward the cursor. Lower = laggier/smoother, higher = snappier.
+//   (Vertical offset lives in CSS: --popup-offset-y)
+const POPUP_FOLLOW = 0.15;
+let popupX = 0, popupY = 0;       // eased position
+let popupTargetX = 0, popupTargetY = 0; // cursor target
+
 // ---------------------------------------------------------------------------
 // Landing headline — cascade-in + magnetic mouse-avoidance per character
 // ---------------------------------------------------------------------------
@@ -622,8 +629,8 @@ window.addEventListener("pointermove", (e) => {
   pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
   pointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
   mouseNDC.set(pointer.x, pointer.y);
-  popup.style.left = e.clientX + "px";
-  popup.style.top = e.clientY + "px";
+  popupTargetX = e.clientX;
+  popupTargetY = e.clientY;
 });
 
 function flowerUnderPointer() {
@@ -762,6 +769,12 @@ function damp(current, target, lambda, dt) {
 function animate() {
   const dt = Math.min(clock.getDelta(), 0.05);
   const elapsed = clock.getElapsedTime();
+
+  // Smoothly ease the hover popup toward the cursor.
+  popupX += (popupTargetX - popupX) * POPUP_FOLLOW;
+  popupY += (popupTargetY - popupY) * POPUP_FOLLOW;
+  popup.style.left = popupX + "px";
+  popup.style.top = popupY + "px";
 
   // While editing, keep the head fully painted-in and visible regardless of phase.
   if (headEdit.show) {

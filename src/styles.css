@@ -4,6 +4,13 @@
   font-display: swap;
 }
 
+:root {
+  /* Speed at which the hover popup opens/closes (fade + scale). Lower = snappier. */
+  --popup-speed: 1s;
+  /* Vertical gap between the cursor and the popup. Lower = more under the cursor. */
+  --popup-offset-y: 30px;
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -64,9 +71,11 @@ body {
   transform: translate(0, 0);
   will-change: transform;
 }
+
 #bg-text .char.space {
   white-space: pre;
 }
+
 #bg-text .char-inner {
   display: inline-block;
   opacity: 0;
@@ -96,15 +105,15 @@ body {
   pointer-events: none;
   opacity: 0;
   transform-origin: top center;
-  transform: translate(-50%, 14px) scale(0);
-  transition: opacity 0.18s ease, transform 0.18s ease;
+  transform: translate(-50%, var(--popup-offset-y, 4px)) scale(0);
+  transition: opacity var(--popup-speed) ease, transform var(--popup-speed) ease;
   white-space: nowrap;
   z-index: 10;
 }
 
 .popup.visible {
   opacity: 1;
-  transform: translate(-50%, 14px) scale(1);
+  transform: translate(-50%, var(--popup-offset-y, 4px)) scale(1);
 }
 
 /* Poem panel — right half, scroll-reveal in phase 2 */
