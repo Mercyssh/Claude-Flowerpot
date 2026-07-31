@@ -1,0 +1,82 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body { width: 100%; height: 100%; overflow: hidden; background: #f6ece2; }
+
+#scene { position: fixed; inset: 0; display: block; width: 100%; height: 100%; z-index: 1; }
+
+/* Landing text — behind the transparent canvas so flowers can mask it */
+#bg-text {
+  position: fixed;
+  top: 18%;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 0;
+  margin: 0;
+  font-family: "Caveat", cursive;
+  font-weight: 600;
+  font-size: clamp(40px, 8vw, 120px);
+  color: #d0a48c;
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Hover popup — follows the mouse in phase 1 */
+.popup {
+  position: fixed;
+  top: 0; left: 0;
+  padding: 8px 14px;
+  background: rgba(30, 28, 24, 0.92);
+  color: #f6f3ec;
+  font-family: "Caveat", cursive;
+  font-size: 22px;
+  border-radius: 10px;
+  pointer-events: none;
+  opacity: 0;
+  transform-origin: top center;
+  transform: translate(-50%, 14px) scale(0);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  white-space: nowrap;
+  z-index: 10;
+}
+.popup.visible { opacity: 1; transform: translate(-50%, 14px) scale(1); }
+
+/* Poem panel — right half, scroll-reveal in phase 2 */
+.poem {
+  position: fixed;
+  top: 0; right: 0;
+  width: 50vw;
+  height: 100%;
+  overflow-y: auto;
+  padding: 40vh 6vw 40vh 4vw;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.8s ease;
+  z-index: 5;
+}
+.poem.active { opacity: 1; pointer-events: auto; }
+
+.poem-inner { max-width: 34ch; }
+
+.poem .line {
+  font-family: "Cormorant Garamond", serif;
+  font-size: clamp(20px, 2.4vw, 34px);
+  line-height: 1.5;
+  color: #2a2620;
+  margin-bottom: 0.9em;
+  opacity: 0;
+  transform: translateY(18px);
+  transition: opacity 0.7s ease, transform 0.7s ease;
+}
+.poem .line.revealed { opacity: 1; transform: translateY(0); }
+
+.poem .signature {
+  font-family: "Caveat", cursive;
+  font-size: clamp(28px, 3.2vw, 46px);
+  color: #6b4f3a;
+  margin-top: 1.4em;
+  opacity: 0;
+  transform: translateY(18px);
+  transition: opacity 0.8s ease, transform 0.8s ease;
+}
+.poem .signature.revealed { opacity: 1; transform: translateY(0); }

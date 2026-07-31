@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Flowerpot — POC</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;600&family=Cormorant+Garamond:ital@0;1&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./src/styles.css" />
+</head>
+<body>
+  <!-- Landing background text (HTML, sits behind the transparent canvas) -->
+  <h1 id="bg-text">Pick one for yourself &lt;3</h1>
+
+  <canvas id="scene"></canvas>
+
+  <!-- Phase 1 overlay: hover popup -->
+  <div id="popup" class="popup"></div>
+
+  <!-- Phase 2 overlay: poem on the right half -->
+  <aside id="poem" class="poem" aria-hidden="true">
+    <div class="poem-inner">
+      <p class="line">In the quiet where the morning pools,</p>
+      <p class="line">a small green promise keeps its counsel.</p>
+      <p class="line">You reached, and it remembered how to open —</p>
+      <p class="line">petal by patient petal, unafraid.</p>
+      <p class="line">Carry it in the soft dark of your hair,</p>
+      <p class="line">a lantern for the hours that forget the sun.</p>
+      <p class="line">And when the road grows long and colorless,</p>
+      <p class="line">let this one bloom insist that you continue.</p>
+      <p class="signature">love, omu</p>
+    </div>
+  </aside>
+
+  <!-- lil-gui panel target created in JS -->
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+      "lil-gui": "https://unpkg.com/lil-gui@0.19.2/dist/lil-gui.esm.js"
+    }
+  }
+  </script>
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
