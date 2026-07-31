@@ -14,7 +14,8 @@ const params = {
   openScale: 0.8,           // scale of a fully-bloomed flower
   flowerAttachScale: 0.35,  // scale the chosen flower shrinks to on the head
   flowerSpacing: 1.27,      // x-distance of the outer flowers from center
-  orbitAmount: 0.35,        // portrait mouse-look: head rotation magnitude (radians)
+  orbitAmountX: 0.21,       // portrait mouse-look: vertical tilt range as cursor moves top↔bottom (radians)
+  orbitAmountY: 0.35,       // portrait mouse-look: horizontal turn range as cursor moves left↔right (radians)
   paintSpeed: 0.3,          // paint-in dissolve speed (progress/sec)
   flowerSnapSpeed: 0.25,     // flower-snap speed (progress/sec); matches paintSpeed by default
   appearDir: "back",          // direction the paint stroke travels across the head
@@ -55,9 +56,9 @@ const CURVE_TYPE = "catmullrom"; // intro spline type
 const CURVE_TENSION = 0.75;      // intro spline corner roundness
 
 const POPUP_TEXT = [
-  "for the quiet days",
-  "for beginning again",
-  "for you, mostly",
+  "Beautiful, as you are..",
+  "Clever, like your mind..",
+  "Funny, how you make me laugh..",
 ];
 
 // ---------------------------------------------------------------------------
@@ -680,12 +681,23 @@ const lines = [...document.querySelectorAll(".poem .line, .poem .signature")];
 // wrapped sentence no longer shifts as one rigid block — each line-break slides in
 // on its own. Original text is stashed on dataset.text so a re-split is possible.
 function splitPoemLine(line) {
-  if (line.dataset.text == null) line.dataset.text = line.textContent;
-  const words = line.dataset.text.split(" ");
+  // Preserve explicit <br> breaks as a "\n" token so an author-forced line break
+  // survives the split (textContent would silently drop the tag). The newline is
+  // not itself darkened — it only forces the row grouping below to start a new row.
+  if (line.dataset.text == null) {
+    line.dataset.text = line.innerHTML.replace(/<br\s*\/?>/gi, "\n");
+  }
+  const words = line.dataset.text.split(/[ ]+|(\n)/).filter((w) => w != null && w !== "");
   line.textContent = "";
   const wordEls = [];
   let idx = 0;
   words.forEach((word) => {
+    if (word === "\n") {
+      // A forced break: emit a real <br> so the word after it measures onto a new
+      // row (offsetTop differs), which the grouping pass below turns into a .p-row.
+      line.appendChild(document.createElement("br"));
+      return;
+    }
     const wordEl = document.createElement("span");
     wordEl.className = "p-word";
     wordEl._first = idx; // char index of this word's first glyph
@@ -951,8 +963,8 @@ function animate() {
   // the head can be rotated while it's still painting in — not only afterwards.
   if ((phase === PHASE.TRANSITION || phase === PHASE.PORTRAIT) && !headEdit.show) {
     _headLookEuler.set(
-      (params.personInvertX ? -1 : 1) * mouseNDC.y * params.orbitAmount * 0.6,
-      (params.personInvertY ? -1 : 1) * mouseNDC.x * params.orbitAmount,
+      (params.personInvertX ? -1 : 1) * mouseNDC.y * params.orbitAmountX,
+      (params.personInvertY ? -1 : 1) * mouseNDC.x * params.orbitAmountY,
       0,
       "YXZ",
     );
@@ -1009,7 +1021,7 @@ appear.add(params, "appearNoiseScale", 0.5, 12, 0.1).name("brush grain").onChang
 appear.add(params, "appearJitter", 0, 1, 0.01).name("edge raggedness").onChange(applyAppearNoise);
 appear.add(params, "appearEdgeSoft", 0, 0.5, 0.005).name("edge softness").onChange(applyAppearNoise);
 appear.add({ replay: replayHeadAppear }, "replay").name("▶ replay reveal");
-// appear.close();
+appear.close();
 
 const cam = gui.addFolder("camera");
 cam.add(params, "fovBefore", 10, 90, 1).name("fov (before select)");
@@ -1031,6 +1043,8 @@ headFolder.add(params, "headScale", 0.05, 5, 0.01).name("scale (uniform)")
   .onChange((v) => head.scale.setScalar(v));
 headFolder.add(params, "personBobAmount", 0, 0.4, 0.005).name("bob amount");
 headFolder.add(params, "personBobSpeed", 0, 4, 0.05).name("bob speed");
+headFolder.add(params, "orbitAmountX", 0, 1.2, 0.01).name("mouse range X (tilt)");
+headFolder.add(params, "orbitAmountY", 0, 1.2, 0.01).name("mouse range Y (turn)");
 headFolder.add(params, "personInvertX").name("invert mouse X");
 headFolder.add(params, "personInvertY").name("invert mouse Y");
 headFolder.add({ log: logHeadTransform }, "log").name("log transform → console");
