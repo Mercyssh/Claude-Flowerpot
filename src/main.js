@@ -14,7 +14,7 @@ const params = {
   openScale: 0.8,           // scale of a fully-bloomed flower
   flowerAttachScale: 0.35,  // scale the chosen flower shrinks to on the head
   flowerSpacing: 1.27,      // x-distance of the outer flowers from center
-  orbitAmountX: 0.21,       // portrait mouse-look: vertical tilt range as cursor moves top↔bottom (radians)
+  orbitAmountX: 0.08,       // portrait mouse-look: vertical tilt range as cursor moves top↔bottom (radians)
   orbitAmountY: 0.35,       // portrait mouse-look: horizontal turn range as cursor moves left↔right (radians)
   paintSpeed: 0.3,          // paint-in dissolve speed (progress/sec)
   flowerSnapSpeed: 0.25,     // flower-snap speed (progress/sec); matches paintSpeed by default
@@ -58,7 +58,50 @@ const CURVE_TENSION = 0.75;      // intro spline corner roundness
 const POPUP_TEXT = [
   "Beautiful, as you are..",
   "Clever, like your mind..",
-  "Funny, how you make me laugh..",
+  "Comfort, that you give..",
+];
+
+// One poem per flower — index matches the flower's layout index (0 = left,
+// 1 = center, 2 = right), same order as POPUP_TEXT above. The chosen flower's
+// poem is built into #poem on selection. `signature` may contain <br>.
+const POEMS = [
+  {
+    // 0 — Beautiful
+    lines: [
+      "Look how beautiful you are!",
+      "So much that my day feels lighter the moment I look at you",
+      "Its a face I will always want to see the next day because..",
+      "Your eyes are the stars I'd gladly fall asleep beneath every night,",
+      "And your smile is the warm morning sun that makes everything feel alive.",
+      "And this bloom is a small mirror of that grace,",
+      "Know I find you beautiful even in the ordinary hours.",
+    ],
+    signature: "Happy Girlfriend Day! <br>love, omu",
+  },
+  {
+    // 1 — Clever
+    lines: [
+      "I don't think I know anyone as clever as you.",
+      "Every problem feels a little smaller after I've talked to you.",
+      "You somehow always have an answer, even to questions I didn't know I was asking",
+      "People spend years looking for answers to life's biggest questions",
+      "But one of them became wonderfully simple when I met you, because..",
+      "you are my answer to love."
+    ],
+    signature: "Happy Girlfriend Day! <br>love, omu",
+  },
+  {
+    // 2 — Funny
+    lines: [
+      "The comfort we share is something special,",
+      "Where you can make the silliest faces without a second thought,",
+      "And I can show the same side in me without any fear",
+      "With you, I never have to hide that side of myself",
+      "Because I know that we are goofballs together",
+      "That can laugh at the silliest of things.",
+    ],
+    signature: "Happy Girlfriend Day! <br>love, omu",
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -119,10 +162,16 @@ const headEdit = { show: false, mode: "translate" };
 // ---------------------------------------------------------------------------
 const loader = new GLTFLoader();
 
-// Hand-painted base color for the flowers
-const flowerTex = new THREE.TextureLoader().load("./flower1/flower1_basecolor.png");
-flowerTex.colorSpace = THREE.SRGBColorSpace;
-flowerTex.flipY = false; // glTF UV convention
+// Hand-painted base colors — one texture per distinct flower model.
+const texLoader = new THREE.TextureLoader();
+function loadFlowerTex(url) {
+  const t = texLoader.load(url);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.flipY = false; // glTF UV convention
+  return t;
+}
+const flower1Tex = loadFlowerTex("./flower1/flower1_basecolor.png");
+const flower2Tex = loadFlowerTex("./flower2/DefaultMaterial_BaseColor.png");
 
 // Ashima 3D simplex noise — used in the vertex stage to add smooth, organic
 // wobble to every petal. Returns roughly [-1, 1].
@@ -188,9 +237,9 @@ const backsideUniforms = {
 // uBloom (1 = closed, 0 = open) selects between the closed/open amplitudes so
 // each instance breathes independently. Returns the material; its live uniforms
 // are stashed on userData.noiseUniforms for per-frame updates.
-function makeFlowerMaterial() {
+function makeFlowerMaterial(tex) {
   const mat = new THREE.MeshBasicMaterial({
-    map: flowerTex,
+    map: tex,
     // NOTE: keep transparent:false. transparent:true + DoubleSide makes the
     // renderer do a 2-pass draw that breaks gl_FrontFacing (three.js #25149),
     // which is what stops the backside tint from ever firing. The petal cutout
@@ -273,23 +322,33 @@ function setBloom(entry, value) {
   }
 }
 
-loader.load("./flower1/flower1.glb", (gltf) => {
-  const base = gltf.scene;
-  // Fan layout: baked from live tuning
-  const layout = [
-    { dir: -1, z: -0.4, rx: 0.681, ry: -0.15, rz: 0.35 },
-    { dir: 0, z: 0, rx: 0.838, ry: 0, rz: 0 },
-    { dir: 1, z: -0.4, rx: 0.75, ry: 0.15, rz: -0.35 },
-  ];
+// Fan layout: baked from live tuning. `src` selects which GLB + texture fills
+// each slot — the right (3rd) flower is flower2; the other two are flower1.
+const layout = [
+  { dir: -1, z: -0.4, rx: 0.681, ry: -0.15, rz: 0.35, src: "f1" },
+  { dir: 0, z: 0, rx: 0.838, ry: 0, rz: 0, src: "f1" },
+  { dir: 1, z: -0.4, rx: 0.75, ry: 0.15, rz: -0.35, src: "f2" },
+];
+
+Promise.all([
+  loader.loadAsync("./flower1/flower1.glb"),
+  loader.loadAsync("./flower2/flower2.glb"),
+]).then(([g1, g2]) => {
+  // Each source pairs a base scene to clone with its own base-color texture.
+  const bases = {
+    f1: { scene: g1.scene, tex: flower1Tex },
+    f2: { scene: g2.scene, tex: flower2Tex },
+  };
 
   layout.forEach((L, i) => {
-    const group = base.clone(true);
+    const base = bases[L.src];
+    const group = base.scene.clone(true);
     // Clone morph arrays + materials so instances animate/texture independently
     const noiseUniforms = [];
     group.traverse((o) => {
       if (o.isMesh) {
         if (o.morphTargetInfluences) o.morphTargetInfluences = o.morphTargetInfluences.slice();
-        o.material = makeFlowerMaterial(); // unlit + vertex wobble
+        o.material = makeFlowerMaterial(base.tex); // unlit + vertex wobble
         noiseUniforms.push(o.material.userData.noiseUniforms);
       }
     });
@@ -315,7 +374,7 @@ loader.load("./flower1/flower1.glb", (gltf) => {
   });
 
   buildIntroCurve();
-}, undefined, (err) => console.error("Failed to load flower1.glb:", err));
+}).catch((err) => console.error("Failed to load flower GLBs:", err));
 
 // ---------------------------------------------------------------------------
 // Intro fly-in: the flowers stream down an S-shaped path (matching the mockup
@@ -660,6 +719,7 @@ window.addEventListener("pointerdown", () => {
   const f = flowerUnderPointer();
   if (!f) return;
   selected = f;
+  buildPoem(f.index); // swap in the poem matching the chosen flower
   phase = PHASE.TRANSITION;
   popup.classList.remove("visible");
   head.visible = true;
@@ -670,8 +730,9 @@ window.addEventListener("pointerdown", () => {
   bgText?.classList.add("faded"); // fade the landing headline out
 });
 
-// Scroll-reveal for the poem
-const lines = [...document.querySelectorAll(".poem .line, .poem .signature")];
+// Scroll-reveal for the poem. Lines are built dynamically per selected flower
+// (see buildPoem), then split + observed here.
+const poemInner = poemEl.querySelector(".poem-inner");
 
 // Split a poem line word -> character, then group the words into VISUAL rows and
 // wrap each row in its own .p-row. Each word is an atomic inline-block (.p-word,
@@ -749,12 +810,31 @@ const io = new IntersectionObserver((entries) => {
   entries.forEach((en) => { if (en.isIntersecting) en.target.classList.add("revealed"); });
 }, { root: poemEl, rootMargin: "-48% 0px -48% 0px", threshold: 0 });
 
-// Row grouping depends on final wrapping, so wait for the webfonts — fallback-font
-// metrics wrap differently and would mis-group the rows.
-document.fonts.ready.then(() => {
-  lines.forEach(splitPoemLine);
-  lines.forEach((l) => io.observe(l));
-});
+// Build the chosen flower's poem into #poem, then split each line (per-char
+// darkening + row grouping) and wire the scroll-reveal observer. Row grouping
+// depends on final wrapping, so this is gated on the webfonts being ready —
+// fallback-font metrics wrap differently and would mis-group the rows. Selection
+// happens long after load, so document.fonts.ready is already resolved in practice.
+function buildPoem(index) {
+  const poem = POEMS[index] || POEMS[0];
+  document.fonts.ready.then(() => {
+    poemInner.innerHTML = "";
+    poem.lines.forEach((text) => {
+      const p = document.createElement("p");
+      p.className = "line";
+      p.textContent = text;
+      poemInner.appendChild(p);
+    });
+    const sig = document.createElement("p");
+    sig.className = "signature";
+    sig.innerHTML = poem.signature;
+    poemInner.appendChild(sig);
+
+    const lines = [...poemInner.querySelectorAll(".line, .signature")];
+    lines.forEach(splitPoemLine);
+    lines.forEach((l) => io.observe(l));
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Animation loop
