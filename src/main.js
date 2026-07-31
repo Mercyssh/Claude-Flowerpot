@@ -595,9 +595,6 @@ const clock = new THREE.Clock();
 const FLYIN_AXIS = new THREE.Vector3(0, 0, 1);
 const BLOOM_AXIS = new THREE.Vector3(0, 1, 0);
 const _spinQuat = new THREE.Quaternion();
-const _anchorScale = new THREE.Vector3();
-const _zero = new THREE.Vector3(0, 0, 0);
-const _identQuat = new THREE.Quaternion();
 
 // Portrait mouse-look: the head's orientation the instant the portrait begins,
 // plus scratch quats for composing the soft mouse-driven rotation on top of it.
@@ -607,47 +604,60 @@ const _headLookOffset = new THREE.Quaternion();
 const _headLookTarget = new THREE.Quaternion();
 
 // Timed flower-snap: 0→1 over the transition, driven at params.flowerSnapSpeed so
-// it can share (or diverge from) the head's appear duration. Start pose is
-// captured once, in the anchor's local frame, then eased toward the rest pose.
+// it can share (or diverge from) the head's appear duration. The flower is parented
+// to `head` (clean positive scale) rather than to flowerAnchor, whose baked -1,-1,-1
+// mirror would inject a phantom 180° rotation on decompose. Start pose is captured
+// once in head-local space; the anchor supplies only the target position.
 let flowerSnapT = 0;
 let snapCaptured = false;
 const _snapStartPos = new THREE.Vector3();
 const _snapStartQuat = new THREE.Quaternion();
 let _snapStartScale = 1;
+const _snapTargetPos = new THREE.Vector3();  // anchor position expressed in head-local space
+const _snapTargetQuat = new THREE.Quaternion(); // anchor orientation in head-local space
+const _tmpV = new THREE.Vector3();
+const _tmpScale = new THREE.Vector3();
+const _qTmp = new THREE.Quaternion();
 
-// Ease the chosen flower toward its resting pose *inside the anchor's frame*:
-// local origin, identity rotation (so it faces along the anchor's Z), and the
-// requested world scale (divide out the anchor's world scale). Run every frame
-// from transition through portrait so the flower never freezes mid-flight.
-function settleFlowerOnAnchor(dt, lambda) {
-  if (!selected) return;
-  const k = 1 - Math.exp(-lambda * dt);
-  if (flowerAnchor && selected.group.parent === flowerAnchor) {
-    selected.group.position.lerp(_zero, k);
-    selected.group.quaternion.slerp(_identQuat, k);
-    flowerAnchor.getWorldScale(_anchorScale);
-    const target = params.flowerAttachScale / _anchorScale.x;
-    selected.group.scale.setScalar(damp(selected.group.scale.x, target, lambda, dt));
+// Parent the flower to `head` and capture its start pose (head-local) once, plus
+// the target position (the anchor's spot, expressed in head-local space). Parenting
+// to head — not flowerAnchor — sidesteps the anchor's baked -1,-1,-1 mirror, which
+// would otherwise decompose into a phantom 180° flip.
+function captureFlowerSnap() {
+  if (!selected || snapCaptured) return;
+  if (selected.group.parent !== head) head.attach(selected.group); // preserves world pose
+  _snapStartPos.copy(selected.group.position);
+  _snapStartQuat.copy(selected.group.quaternion);
+  _snapStartScale = selected.group.scale.x;
+  if (flowerAnchor) {
+    // Position: the anchor spot in head-local space.
+    flowerAnchor.getWorldPosition(_tmpV);
+    head.worldToLocal(_tmpV);
+    _snapTargetPos.copy(_tmpV);
+    // Orientation: the anchor's aim as a *proper* rotation (getWorldQuaternion
+    // drops the -1,-1,-1 mirror), re-expressed in head-local space. Because both
+    // start and target now live in head's clean frame, the slerp is a shortest-arc
+    // rotation — no mirror, no phantom 180° flip.
+    flowerAnchor.getWorldQuaternion(_qTmp);
+    head.getWorldQuaternion(_snapTargetQuat).invert().multiply(_qTmp);
   } else {
-    // No anchor loaded — just settle the world scale.
-    selected.group.scale.setScalar(damp(selected.group.scale.x, params.flowerAttachScale, lambda, dt));
+    _snapTargetPos.set(0, 0, 0);
+    _snapTargetQuat.copy(_snapStartQuat); // no anchor → keep the click orientation
   }
+  snapCaptured = true;
 }
 
-// Timed variant of the settle: ease the flower from its captured start pose to
-// the anchor's rest pose by a normalized factor e (0→1), so the snap has a fixed
-// duration that can be matched to the head's appear animation.
+// Ease the flower from its captured start pose to the rest pose by factor e (0→1):
+// the anchor's position + aim, at flowerAttachScale (divide out the head's world
+// scale). Idempotent at e=1, so the portrait can keep calling it to hold the pose
+// with flowerAttachScale live.
 function applyFlowerSnap(e) {
-  if (!selected) return;
-  if (flowerAnchor && selected.group.parent === flowerAnchor) {
-    selected.group.position.lerpVectors(_snapStartPos, _zero, e);
-    selected.group.quaternion.copy(_snapStartQuat).slerp(_identQuat, e);
-    flowerAnchor.getWorldScale(_anchorScale);
-    const target = params.flowerAttachScale / _anchorScale.x;
-    selected.group.scale.setScalar(THREE.MathUtils.lerp(_snapStartScale, target, e));
-  } else {
-    selected.group.scale.setScalar(THREE.MathUtils.lerp(_snapStartScale, params.flowerAttachScale, e));
-  }
+  if (!selected || selected.group.parent !== head) return;
+  selected.group.position.lerpVectors(_snapStartPos, _snapTargetPos, e);
+  selected.group.quaternion.copy(_snapStartQuat).slerp(_snapTargetQuat, e);
+  head.getWorldScale(_tmpScale);
+  const target = params.flowerAttachScale / _tmpScale.x;
+  selected.group.scale.setScalar(THREE.MathUtils.lerp(_snapStartScale, target, e));
 }
 
 function applySpin(f, angle, axis, worldSpace) {
@@ -738,17 +748,9 @@ function animate() {
     selected.current = damp(selected.current, 0, params.bloomSpeed, dt);
     setBloom(selected, selected.current);
 
-    // Parent to the anchor up front, then capture the flower's start pose (in the
-    // anchor's local frame) once, so the timed snap eases from a fixed point.
-    if (flowerAnchor && selected.group.parent !== flowerAnchor) {
-      flowerAnchor.attach(selected.group);
-    }
-    if (!snapCaptured) {
-      _snapStartPos.copy(selected.group.position);
-      _snapStartQuat.copy(selected.group.quaternion);
-      _snapStartScale = selected.group.scale.x;
-      snapCaptured = true;
-    }
+    // Parent to head + capture the flower's start pose once, so the timed snap
+    // eases from a fixed point toward the anchor spot.
+    captureFlowerSnap();
 
     // shrink the unselected flowers away
     for (const f of flowers) {
@@ -770,10 +772,9 @@ function animate() {
     }
   }
 
-  // --- Phase 3: keep settling so the flower stays locked and flowerAttachScale
-  // stays live. ---
+  // --- Phase 3: hold the flower locked on the head; keep flowerAttachScale live. ---
   if (phase === PHASE.PORTRAIT && selected) {
-    settleFlowerOnAnchor(dt, 6);
+    applyFlowerSnap(1);
   }
 
   // Soft mouse-look runs from the moment the head appears (transition) onward, so
