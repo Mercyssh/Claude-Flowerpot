@@ -21,10 +21,10 @@ const params = {
   introStagger: 0.2,       // seconds between successive flowers entering
   introSpinTurns: 0.8,      // full rotations each flower does while flying in
   bloomSpin: 1.15,           // radians a flower turns as it blooms (stops when open)
-  backsideOverlay: false,   // tint one side of the petals
-  backsideFace: "back",     // which faces to tint: "back" or "front"
-  backsideColor: "#8a2f2f", // color multiplied into the tinted-side texture
-  backsideStrength: 0.6,    // how strongly the tint is applied (0..1)
+  backsideOverlay: true,   // tint one side of the petals
+  backsideFace: "back",     // winding flip: swap if the tint lands on the wrong side
+  backsideColor: "#8a2f2f", // color blended into the tinted-side texture
+  backsideStrength: 0.6,    // peak tint strength at full closed/open (0..1)
   editCurve: false,         // show the draggable intro-curve editor
   curveType: "catmullrom",  // spline type: centripetal | chordal | catmullrom
   curveTension: 0.75,       // corner roundness (only used by "catmullrom" type)
@@ -188,17 +188,20 @@ function makeFlowerMaterial() {
       "uniform float uBacksideFront;\n" +
       "uniform vec3 uBacksideColor;\n" +
       "uniform float uBacksideStrength;\n" +
+      "uniform float uBloom;\n" +
       shader.fragmentShader.replace(
         "#include <map_fragment>",
         /* glsl */`#include <map_fragment>
-        bool _tintThisFace = (uBacksideFront > 0.5) ? gl_FrontFacing : !gl_FrontFacing;
-        if (_tintThisFace) {
-          // Blend the texture *toward* the flat color so the color actually
-          // reads on dark texels. Multiply-only tinting can just darken and
-          // read as "no change" on an already-dark backside texture.
-          diffuseColor.rgb = mix(diffuseColor.rgb, uBacksideColor,
-                                 uBacksideStrength * uBacksideOn);
-        }`
+        // Bloom-driven side crossfade. uBloom: 1 = closed, 0 = open.
+        // Closed -> tint the FRONT face; as the flower opens the tint fades
+        // across to the BACK face. uBacksideFront flips which gl side counts
+        // as "front" (use it if winding puts the effect on the wrong side).
+        // Blend the texture *toward* the flat color so it reads on dark texels.
+        float _open = 1.0 - clamp(uBloom, 0.0, 1.0);            // 0 closed .. 1 open
+        bool _isFront = (uBacksideFront > 0.5) ? !gl_FrontFacing : gl_FrontFacing;
+        float _sideAmt = _isFront ? (1.0 - _open) : _open;      // front strong closed, back strong open
+        diffuseColor.rgb = mix(diffuseColor.rgb, uBacksideColor,
+                               uBacksideStrength * uBacksideOn * _sideAmt);`
       );
 
     shader.vertexShader =
