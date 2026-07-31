@@ -691,9 +691,14 @@ for (const line of lines) {
   });
 }
 
+// Reveal a line only as it crosses the vertical centre of the screen. The
+// negative top/bottom rootMargin shrinks the observer's viewport to a thin band
+// at the panel's middle, so lines light up one-by-one as you scroll them through
+// centre — nothing pre-reveals on open except the first line, which is parked
+// there by the panel's top padding (see .poem in styles.css).
 const io = new IntersectionObserver((entries) => {
   entries.forEach((en) => { if (en.isIntersecting) en.target.classList.add("revealed"); });
-}, { root: poemEl, threshold: 0.6 });
+}, { root: poemEl, rootMargin: "-48% 0px -48% 0px", threshold: 0 });
 lines.forEach((l) => io.observe(l));
 
 // ---------------------------------------------------------------------------

@@ -133,7 +133,10 @@ body {
   width: 50vw;
   height: 100%;
   overflow-y: auto;
-  padding: 40vh 6vw 40vh 4vw;
+  /* Top pad parks the first line at screen centre, so it reveals as the poem
+     opens (the "very beginning"). Bottom pad lets the last line scroll up to
+     centre too. Both keys off the -48% centre band in the IntersectionObserver. */
+  padding: 50vh 6vw 50vh 4vw;
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.8s ease;
