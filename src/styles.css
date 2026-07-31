@@ -9,6 +9,15 @@
   --popup-speed: 1s;
   /* Vertical gap between the cursor and the popup. Lower = more under the cursor. */
   --popup-offset-y: 30px;
+
+  /* --- Poem reveal (POLA-style per-character left-to-right darkening) --- */
+  /* How long a single character takes to go from faint to solid. */
+  --poem-reveal-speed: 0.5s;
+  /* Resting opacity of not-yet-revealed characters — they sit faintly visible,
+     then darken to full as the wavefront sweeps across. 0 = fully hidden. */
+  --poem-rest-opacity: 0.14;
+  /* Easing for each character's fade. */
+  --poem-reveal-ease: ease-out;
 }
 
 * {
@@ -147,14 +156,6 @@ body {
   line-height: 1.5;
   color: #2a2620;
   margin-bottom: 0.9em;
-  opacity: 0;
-  transform: translateY(18px);
-  transition: opacity 0.7s ease, transform 0.7s ease;
-}
-
-.poem .line.revealed {
-  opacity: 1;
-  transform: translateY(0);
 }
 
 .poem .signature {
@@ -162,12 +163,21 @@ body {
   font-size: clamp(28px, 3.2vw, 46px);
   color: #6b4f3a;
   margin-top: 1.4em;
-  opacity: 0;
-  transform: translateY(18px);
-  transition: opacity 0.8s ease, transform 0.8s ease;
 }
 
-.poem .signature.revealed {
+/* Per-character reveal — each glyph starts faint and darkens to solid on its own
+   staggered delay (set inline as --poem-char-delay by JS), so the fade sweeps
+   left-to-right across the line. No blur, no motion — just opacity. Whitespace is
+   preserved so words don't collapse while characters are inline-block. */
+.poem .p-char {
+  display: inline-block;
+  white-space: pre;
+  opacity: var(--poem-rest-opacity);
+  transition: opacity var(--poem-reveal-speed) var(--poem-reveal-ease);
+  transition-delay: var(--poem-char-delay, 0s);
+}
+
+.poem .line.revealed .p-char,
+.poem .signature.revealed .p-char {
   opacity: 1;
-  transform: translateY(0);
 }

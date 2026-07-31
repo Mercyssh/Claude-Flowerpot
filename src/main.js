@@ -671,6 +671,26 @@ window.addEventListener("pointerdown", () => {
 
 // Scroll-reveal for the poem
 const lines = [...document.querySelectorAll(".poem .line, .poem .signature")];
+
+// Split each poem line into per-character spans so the reveal can "surface" the
+// text one character at a time (POLA-style blur-in), instead of fading the whole
+// line at once. The stagger delay per char is written as a CSS custom property;
+// the actual blur/fade/rise lives in styles.css and fires when the parent line
+// gains .revealed. Splitting is purely additive — if it were skipped the lines
+// still render, they'd just lack the per-char cascade.
+const POEM_CHAR_STAGGER = 0.05; // s — delay per char; sets the left-to-right sweep speed
+for (const line of lines) {
+  const text = line.textContent;
+  line.textContent = "";
+  [...text].forEach((ch, i) => {
+    const span = document.createElement("span");
+    span.className = "p-char";
+    span.textContent = ch;
+    span.style.setProperty("--poem-char-delay", (i * POEM_CHAR_STAGGER).toFixed(3) + "s");
+    line.appendChild(span);
+  });
+}
+
 const io = new IntersectionObserver((entries) => {
   entries.forEach((en) => { if (en.isIntersecting) en.target.classList.add("revealed"); });
 }, { root: poemEl, threshold: 0.6 });
