@@ -11,12 +11,17 @@
   --popup-offset-y: 30px;
 
   /* --- Poem reveal (POLA-style per-character left-to-right darkening) --- */
-  /* How long a single character takes to go from faint to solid. */
+  /* How long a single character takes to go from faint to solid + slide home. */
   --poem-reveal-speed: 0.5s;
+  /* Delay added per character across the line — THE reveal-speed knob. Smaller =
+     the wavefront races across the line faster; larger = slower, lazier sweep. */
+  --poem-sweep-step: 0.01s;
+  /* How far each visual row slides in as it reveals. */
+  --poem-reveal-shift: -0.35em;
   /* Resting opacity of not-yet-revealed characters — they sit faintly visible,
      then darken to full as the wavefront sweeps across. 0 = fully hidden. */
   --poem-rest-opacity: 0.14;
-  /* Easing for each character's fade. */
+  /* Easing for each character's fade + slide. */
   --poem-reveal-ease: ease-out;
 }
 
@@ -168,16 +173,38 @@ body {
   margin-top: 1.4em;
 }
 
-/* Per-character reveal — each glyph starts faint and darkens to solid on its own
-   staggered delay (set inline as --poem-char-delay by JS), so the fade sweeps
-   left-to-right across the line. No blur, no motion — just opacity. Whitespace is
-   preserved so words don't collapse while characters are inline-block. */
+/* Each word is an atomic box: it lays out on the line as one unit and never
+   breaks internally, so a word always stays whole (wraps only at the spaces). */
+.poem .p-word {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+/* Each VISUAL row (a wrapped line-break) slides in as its own unit. Its slide is
+   timed off the SAME character sweep as the darkening: it starts when this row's
+   first glyph begins darkening (first * sweep-step) and lasts exactly as long as
+   the wavefront takes to cross the row plus one glyph's fade —
+   (last - first) * sweep-step + reveal-speed — so slide and reveal finish together. */
+.poem .p-row {
+  display: block;
+  transform: translateX(calc(-1 * var(--poem-reveal-shift)));
+  transition:
+    transform calc((var(--poem-row-last) - var(--poem-row-first)) * var(--poem-sweep-step) + var(--poem-reveal-speed)) var(--poem-reveal-ease) calc(var(--poem-row-first) * var(--poem-sweep-step));
+}
+
+.poem .line.revealed .p-row,
+.poem .signature.revealed .p-row {
+  transform: translateX(0);
+}
+
+/* Per-character fade — each glyph starts faint and darkens to solid on its own
+   index * sweep-step delay, so the darkening sweeps left-to-right across the line.
+   No transform here anymore; the slide is handled per-line above. */
 .poem .p-char {
   display: inline-block;
-  white-space: pre;
   opacity: var(--poem-rest-opacity);
   transition: opacity var(--poem-reveal-speed) var(--poem-reveal-ease);
-  transition-delay: var(--poem-char-delay, 0s);
+  transition-delay: calc(var(--poem-char-index, 0) * var(--poem-sweep-step));
 }
 
 .poem .line.revealed .p-char,

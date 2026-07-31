@@ -672,22 +672,59 @@ window.addEventListener("pointerdown", () => {
 // Scroll-reveal for the poem
 const lines = [...document.querySelectorAll(".poem .line, .poem .signature")];
 
-// Split each poem line into per-character spans so the reveal can "surface" the
-// text one character at a time (POLA-style blur-in), instead of fading the whole
-// line at once. The stagger delay per char is written as a CSS custom property;
-// the actual blur/fade/rise lives in styles.css and fires when the parent line
-// gains .revealed. Splitting is purely additive — if it were skipped the lines
-// still render, they'd just lack the per-char cascade.
-const POEM_CHAR_STAGGER = 0.05; // s — delay per char; sets the left-to-right sweep speed
-for (const line of lines) {
-  const text = line.textContent;
+// Split a poem line word -> character, then group the words into VISUAL rows and
+// wrap each row in its own .p-row. Each word is an atomic inline-block (.p-word,
+// nowrap) so it can never break mid-word — only the spaces between words are wrap
+// points. The per-char running index drives the left-to-right darkening (via
+// --poem-sweep-step in CSS); the per-row index drives the staggered slide, so a
+// wrapped sentence no longer shifts as one rigid block — each line-break slides in
+// on its own. Original text is stashed on dataset.text so a re-split is possible.
+function splitPoemLine(line) {
+  if (line.dataset.text == null) line.dataset.text = line.textContent;
+  const words = line.dataset.text.split(" ");
   line.textContent = "";
-  [...text].forEach((ch, i) => {
-    const span = document.createElement("span");
-    span.className = "p-char";
-    span.textContent = ch;
-    span.style.setProperty("--poem-char-delay", (i * POEM_CHAR_STAGGER).toFixed(3) + "s");
-    line.appendChild(span);
+  const wordEls = [];
+  let idx = 0;
+  words.forEach((word) => {
+    const wordEl = document.createElement("span");
+    wordEl.className = "p-word";
+    wordEl._first = idx; // char index of this word's first glyph
+    for (const ch of word) {
+      const span = document.createElement("span");
+      span.className = "p-char";
+      span.textContent = ch;
+      span.style.setProperty("--poem-char-index", idx);
+      wordEl.appendChild(span);
+      idx++;
+    }
+    wordEl._last = idx - 1; // char index of this word's last glyph
+    line.appendChild(wordEl);
+    line.appendChild(document.createTextNode(" ")); // measure wrapping with real gaps
+    wordEls.push(wordEl);
+    idx++; // the gap keeps the darkening sweep evenly paced between words
+  });
+
+  // Group consecutive words that share a vertical position into one visual row,
+  // then re-wrap each row so the slide can target it individually.
+  const rows = [];
+  let lastTop = null;
+  for (const wEl of wordEls) {
+    if (wEl.offsetTop !== lastTop) { rows.push([]); lastTop = wEl.offsetTop; }
+    rows[rows.length - 1].push(wEl);
+  }
+  line.textContent = "";
+  rows.forEach((row) => {
+    const rowEl = document.createElement("span");
+    rowEl.className = "p-row";
+    // First/last char index of this row — CSS derives the slide's start delay and
+    // duration from these so the slide spans exactly the darkening of this row.
+    rowEl.style.setProperty("--poem-row-first", row[0]._first);
+    rowEl.style.setProperty("--poem-row-last", row[row.length - 1]._last);
+    row.forEach((wEl, wi) => {
+      rowEl.appendChild(wEl);
+      if (wi < row.length - 1) rowEl.appendChild(document.createTextNode(" "));
+    });
+    line.appendChild(rowEl);
   });
 }
 
@@ -699,7 +736,13 @@ for (const line of lines) {
 const io = new IntersectionObserver((entries) => {
   entries.forEach((en) => { if (en.isIntersecting) en.target.classList.add("revealed"); });
 }, { root: poemEl, rootMargin: "-48% 0px -48% 0px", threshold: 0 });
-lines.forEach((l) => io.observe(l));
+
+// Row grouping depends on final wrapping, so wait for the webfonts — fallback-font
+// metrics wrap differently and would mis-group the rows.
+document.fonts.ready.then(() => {
+  lines.forEach(splitPoemLine);
+  lines.forEach((l) => io.observe(l));
+});
 
 // ---------------------------------------------------------------------------
 // Animation loop
