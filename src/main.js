@@ -93,7 +93,7 @@ let flowerAnchor = new THREE.Object3D();
 const loader = new GLTFLoader();
 
 // Hand-painted base color for the flowers
-const flowerTex = new THREE.TextureLoader().load("./flower1_basecolor.png");
+const flowerTex = new THREE.TextureLoader().load("./flower1/flower1_basecolor.png");
 flowerTex.colorSpace = THREE.SRGBColorSpace;
 flowerTex.flipY = false; // glTF UV convention
 
@@ -246,7 +246,7 @@ function setBloom(entry, value) {
   }
 }
 
-loader.load("./flower1.glb", (gltf) => {
+loader.load("./flower1/flower1.glb", (gltf) => {
   const base = gltf.scene;
   // Fan layout: baked from live tuning
   const layout = [
