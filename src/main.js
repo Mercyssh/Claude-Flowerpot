@@ -165,7 +165,10 @@ const backsideUniforms = {
 function makeFlowerMaterial() {
   const mat = new THREE.MeshBasicMaterial({
     map: flowerTex,
-    transparent: true,
+    // NOTE: keep transparent:false. transparent:true + DoubleSide makes the
+    // renderer do a 2-pass draw that breaks gl_FrontFacing (three.js #25149),
+    // which is what stops the backside tint from ever firing. The petal cutout
+    // comes from alphaTest, which works fine on an opaque material.
     alphaTest: 0.5,
     side: THREE.DoubleSide,
   });
@@ -190,7 +193,10 @@ function makeFlowerMaterial() {
         /* glsl */`#include <map_fragment>
         bool _tintThisFace = (uBacksideFront > 0.5) ? gl_FrontFacing : !gl_FrontFacing;
         if (_tintThisFace) {
-          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * uBacksideColor,
+          // Blend the texture *toward* the flat color so the color actually
+          // reads on dark texels. Multiply-only tinting can just darken and
+          // read as "no change" on an already-dark backside texture.
+          diffuseColor.rgb = mix(diffuseColor.rgb, uBacksideColor,
                                  uBacksideStrength * uBacksideOn);
         }`
       );
