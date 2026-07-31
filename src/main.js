@@ -17,6 +17,8 @@ const params = {
   noiseFreq: 0.2,           // spatial frequency of the petal-wobble noise
   noiseClosed: 0.03,        // wobble amplitude while a flower is closed
   noiseOpen: 0.04,          // wobble amplitude while a flower is bloomed
+  bobAmount: 0.05,          // vertical bob height once flowers settle (world units)
+  bobSpeed: 1.2,            // vertical bob frequency (cycles ~ radians/sec)
   bloomSpin: 1.15,           // radians a flower turns as it blooms (stops when open)
   backsideOverlay: true,   // tint one side of the petals
   backsideFace: "back",     // winding flip: swap if the tint lands on the wrong side
@@ -296,6 +298,8 @@ loader.load("./flower1.glb", (gltf) => {
 // ---------------------------------------------------------------------------
 let introCurve = null;
 let introTime = 0;
+let chooseStart = 0;       // elapsed time when flowers settle → bob eases in from here
+const BOB_RAMP = 1.5;      // seconds for the bob to fade from still to full amplitude
 let introStopT = [];
 let introStopS = [];
 const introTmp = new THREE.Vector3();
@@ -526,6 +530,7 @@ function animate() {
     if (allLanded) {
       for (const f of flowers) f.group.position.copy(f.homePos);
       phase = PHASE.CHOOSING;
+      chooseStart = elapsed; // anchor the bob ramp-in to the moment they settle
     }
   }
 
@@ -540,6 +545,12 @@ function animate() {
       f.group.scale.setScalar(s);
       // Twirl about the stem while blooming; hold once fully open or closed.
       applySpin(f, params.bloomSpin * (1 - f.current), BLOOM_AXIS, false);
+      // Gentle vertical bob around the home spot; phase-offset per flower so
+      // they don't rise/fall in lockstep. Anchored to homePos.y so it can't drift.
+      // Amplitude eases in from 0 over BOB_RAMP so they don't snap into motion.
+      const ramp = easeInOutCubic(clamp01((elapsed - chooseStart) / BOB_RAMP));
+      const bob = Math.sin(elapsed * params.bobSpeed + f.index * 2.1) * params.bobAmount * ramp;
+      f.group.position.y = f.homePos.y + bob;
     }
   }
 
@@ -617,6 +628,8 @@ motion.add(params, "noiseFreq", 0.2, 6, 0.05);
 motion.add(params, "noiseClosed", 0, 0.2, 0.005);
 motion.add(params, "noiseOpen", 0, 0.2, 0.005);
 motion.add(params, "bloomSpin", 0, Math.PI, 0.05);
+motion.add(params, "bobAmount", 0, 0.3, 0.005);
+motion.add(params, "bobSpeed", 0, 4, 0.05);
 
 function updateBackside() {
   backsideUniforms.uBacksideOn.value = params.backsideOverlay ? 1 : 0;
