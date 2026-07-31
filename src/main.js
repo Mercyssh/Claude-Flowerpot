@@ -10,8 +10,6 @@ const params = {
   aoIntensity: 0.4,         // strength of shading darkening (0..1)
   shadingSoftness: 1.0,     // runtime light wrap when no AO map is present
   bloomSpeed: 2.5,          // how fast a flower blooms/closes on hover
-  closedShrink: 0.7,        // scale of a fully-closed flower
-  openScale: 0.8,           // scale of a fully-bloomed flower
   flowerAttachScale: 0.35,  // scale the chosen flower shrinks to on the head
   flowerSpacing: 1.27,      // x-distance of the outer flowers from center
   orbitAmountX: 0.08,       // portrait mouse-look: vertical tilt range as cursor moves top↔bottom (radians)
@@ -322,12 +320,22 @@ function setBloom(entry, value) {
   }
 }
 
-// Fan layout: baked from live tuning. `src` selects which GLB + texture fills
-// each slot — the right (3rd) flower is flower2; the other two are flower1.
+// Per-flower controls (index = layout slot: 0 left, 1 center, 2 right). All are
+// live-editable in the GUI. closedShrink/openScale are the scales before/after
+// bloom; rx/ry/rz are the resting orientation each flower holds once the intro
+// fly-in ends (bloom spin composes on top).
+const flowerCfg = [
+  { closedShrink: 0.7, openScale: 0.8, rx: 0.681, ry: -0.15, rz: 0.35 },
+  { closedShrink: 0.7, openScale: 0.8, rx: 0.838, ry: 0.0, rz: 0.0 },
+  { closedShrink: 0.7, openScale: 0.8, rx: 0.75, ry: 0.15, rz: -0.35 },
+];
+
+// Fan layout: position basics per slot. `src` picks the GLB + texture — the right
+// (3rd) flower is flower2, the other two flower1. Scale + rotation live in flowerCfg.
 const layout = [
-  { dir: -1, z: -0.4, rx: 0.681, ry: -0.15, rz: 0.35, src: "f1" },
-  { dir: 0, z: 0, rx: 0.838, ry: 0, rz: 0, src: "f1" },
-  { dir: 1, z: -0.4, rx: 0.75, ry: 0.15, rz: -0.35, src: "f2" },
+  { dir: -1, z: -0.4, src: "f1" },
+  { dir: 0, z: 0, src: "f1" },
+  { dir: 1, z: -0.4, src: "f2" },
 ];
 
 Promise.all([
@@ -342,6 +350,7 @@ Promise.all([
 
   layout.forEach((L, i) => {
     const base = bases[L.src];
+    const cfg = flowerCfg[i];
     const group = base.scene.clone(true);
     // Clone morph arrays + materials so instances animate/texture independently
     const noiseUniforms = [];
@@ -353,8 +362,8 @@ Promise.all([
       }
     });
     group.position.set(L.dir * params.flowerSpacing, -1.2, L.z);
-    group.rotation.set(L.rx, L.ry, L.rz);
-    group.scale.setScalar(params.closedShrink); // start closed = shrunk
+    group.rotation.set(cfg.rx, cfg.ry, cfg.rz);
+    group.scale.setScalar(cfg.closedShrink); // start closed = shrunk
 
     const entry = {
       group,
@@ -442,6 +451,17 @@ function applyFlowerSpacing() {
     f.group.position.x = f.spacingDir * params.flowerSpacing;
     f.homePos.x = f.group.position.x;
   }
+}
+
+// Push a flower's edited resting rotation (flowerCfg[i]) into its homeQuat — the
+// base pose applySpin composes bloom/fly-in spin onto, so the flower settles into
+// this orientation once the intro ends. GUI hook; takes effect next frame.
+const _cfgEuler = new THREE.Euler();
+function applyFlowerRotation(i) {
+  const f = flowers.find((fl) => fl.index === i);
+  if (!f) return;
+  const c = flowerCfg[i];
+  f.homeQuat.setFromEuler(_cfgEuler.set(c.rx, c.ry, c.rz));
 }
 
 // ---------------------------------------------------------------------------
@@ -972,7 +992,7 @@ function animate() {
       // Travel by arc-length fraction → even speed along the whole path.
       introCurve.getPointAt(e * introStopS[f.index], introTmp);
       f.group.position.copy(introTmp);
-      f.group.scale.setScalar(params.closedShrink); // stay closed while flying
+      f.group.scale.setScalar(flowerCfg[f.index].closedShrink); // stay closed while flying
       // Eased spin, decelerating to the resting pose on landing.
       applySpin(f, INTRO_SPIN_TURNS * Math.PI * 2 * (1 - e), FLYIN_AXIS, true);
       if (local < 1) allLanded = false;
@@ -991,7 +1011,8 @@ function animate() {
       f.current = damp(f.current, f.target, params.bloomSpeed, dt);
       setBloom(f, f.current);
       // closed (current→1) shrinks; open (current→0) grows to openScale
-      const s = THREE.MathUtils.lerp(params.openScale, params.closedShrink, f.current);
+      const cfg = flowerCfg[f.index];
+      const s = THREE.MathUtils.lerp(cfg.openScale, cfg.closedShrink, f.current);
       f.group.scale.setScalar(s);
       // Twirl about the stem while blooming; hold once fully open or closed.
       applySpin(f, params.bloomSpin * (1 - f.current), BLOOM_AXIS, false);
@@ -1088,10 +1109,24 @@ animate();
 const gui = new GUI({ title: "Flowerpot params" });
 gui.add(params, "bloomSpeed", 1, 15, 0.1);
 gui.add(params, "flowerSpacing", 0, 2.5, 0.01).onChange(applyFlowerSpacing);
-gui.add(params, "closedShrink", 0.5, 1, 0.01);
-gui.add(params, "openScale", 0.8, 1.8, 0.01);
 gui.add(params, "flowerAttachScale", 0.05, 1, 0.01);
 gui.add(params, "orbitAmount", 0, 0.5, 0.01);
+
+// Per-flower scale (before/after bloom) + resting rotation. flowerCfg exists at
+// load, so these controls bind directly; rotation needs applyFlowerRotation to
+// refresh the flower's homeQuat, scale is read live each frame so it needs no hook.
+const perFlower = gui.addFolder("per-flower");
+const slotNames = ["left (1st)", "center (2nd)", "right (3rd)"];
+flowerCfg.forEach((cfg, i) => {
+  const sub = perFlower.addFolder(slotNames[i]);
+  sub.add(cfg, "closedShrink", 0.3, 1.5, 0.01).name("scale before bloom");
+  sub.add(cfg, "openScale", 0.3, 2.0, 0.01).name("scale after bloom");
+  sub.add(cfg, "rx", -Math.PI, Math.PI, 0.01).name("rot x").onChange(() => applyFlowerRotation(i));
+  sub.add(cfg, "ry", -Math.PI, Math.PI, 0.01).name("rot y").onChange(() => applyFlowerRotation(i));
+  sub.add(cfg, "rz", -Math.PI, Math.PI, 0.01).name("rot z").onChange(() => applyFlowerRotation(i));
+  sub.close();
+});
+perFlower.close();
 
 const appear = gui.addFolder("person appear");
 appear.add(params, "paintSpeed", 0.1, 2, 0.05).name("speed");
