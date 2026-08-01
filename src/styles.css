@@ -125,7 +125,8 @@ html {
   opacity: 0;
   transform-origin: top center;
   transform: translate(-50%, var(--popup-offset-y, 4px)) scale(0);
-  transition: opacity var(--popup-speed) ease, transform var(--popup-speed) ease;
+  transition: opacity var(--popup-speed) ease, transform var(--popup-speed) ease,
+    background-color 0.35s ease, color 0.35s ease;
   white-space: nowrap;
   z-index: 10;
 }
@@ -147,6 +148,8 @@ html {
   inset: 0;
   z-index: -1;
   pointer-events: none;
+  opacity: 0; /* JS fades this to 1 on the first active frame (slow reveal) */
+  transition: opacity 2.5s ease;
 }
 
 /* Poem panel — right half, scroll-reveal in phase 2 */

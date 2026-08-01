@@ -143,6 +143,84 @@ function applyShadingParams() {
 applyShadingParams();
 
 // ---------------------------------------------------------------------------
+// Audio — a looping nature-piano bed + a soft chime on flower select. Both are
+// gated behind the first user gesture: browsers block audio autoplay until the
+// user has interacted with the page. We attempt playback on load anyway (some
+// browsers grant it via prior engagement) and fall back to a one-time gesture.
+// ---------------------------------------------------------------------------
+const AUDIO = {
+  muted: false,       // master mute (silences bed + chime)
+  musicVolume: 0.2,  // ambient loop volume (0..1)
+  chimeVolume: 0.5,   // select chime volume (0..1)
+};
+
+const ambient = new Audio("./assets/audio/ambient-loop.mp3");
+ambient.loop = true;
+ambient.preload = "auto";
+ambient.volume = AUDIO.musicVolume;
+
+// Mask the loop seam: fade the bed down over the last AMBIENT_FADE seconds and
+// back up over the first, so a track that isn't authored gapless restarts as a
+// soft swell instead of an audible click. Driven per-frame from the render loop
+// (timeupdate fires too coarsely to ramp smoothly); the envelope multiplies the
+// user's musicVolume, which stays the single knob for overall level.
+const AMBIENT_FADE = 1.5; // s — length of the in/out swell at each loop boundary
+function updateAmbientVolume() {
+  const d = ambient.duration;
+  let env = 1;
+  if (d && isFinite(d)) {
+    const t = ambient.currentTime;
+    if (t < AMBIENT_FADE) env = t / AMBIENT_FADE;
+    else if (t > d - AMBIENT_FADE) env = Math.max(0, (d - t) / AMBIENT_FADE);
+  }
+  ambient.volume = AUDIO.musicVolume * env;
+}
+
+// Small pool of chime elements so quick successive selects can overlap and ring
+// out naturally instead of one restart cutting off the previous.
+const chimePool = Array.from({ length: 4 }, () => {
+  const c = new Audio("./assets/audio/chime-select.mp3");
+  c.preload = "auto";
+  return c;
+});
+let chimeIdx = 0;
+let lastChimeAt = 0;
+const CHIME_MIN_GAP = 90; // ms — guard against machine-gun retriggers
+
+function playChime() {
+  if (AUDIO.muted) return;
+  const now = performance.now();
+  if (now - lastChimeAt < CHIME_MIN_GAP) return;
+  lastChimeAt = now;
+  const c = chimePool[chimeIdx];
+  chimeIdx = (chimeIdx + 1) % chimePool.length;
+  c.volume = AUDIO.chimeVolume;
+  c.currentTime = 0;
+  c.play().catch(() => { });
+}
+
+let ambientStarted = false;
+function startAmbient() {
+  if (ambientStarted || AUDIO.muted) return;
+  ambient.volume = AUDIO.musicVolume;
+  // play() must be initiated inside a user-gesture task to be allowed; the
+  // returned promise resolves async but the attempt is already "in-gesture".
+  ambient.play().then(() => { ambientStarted = true; }).catch(() => { });
+}
+
+// First interaction of any accepted kind unlocks + starts the bed, then detaches.
+function unlockAudioOnce() {
+  window.removeEventListener("pointerdown", unlockAudioOnce);
+  window.removeEventListener("keydown", unlockAudioOnce);
+  window.removeEventListener("touchstart", unlockAudioOnce);
+  startAmbient();
+}
+window.addEventListener("pointerdown", unlockAudioOnce);
+window.addEventListener("keydown", unlockAudioOnce);
+window.addEventListener("touchstart", unlockAudioOnce);
+startAmbient(); // best-effort immediate start (silently rejected if blocked)
+
+// ---------------------------------------------------------------------------
 // State machine
 // ---------------------------------------------------------------------------
 const PHASE = { INTRO: "intro", CHOOSING: "choosing", TRANSITION: "transition", PORTRAIT: "portrait" };
@@ -766,6 +844,7 @@ window.addEventListener("pointerdown", () => {
   const f = flowerUnderPointer();
   if (!f) return;
   selected = f;
+  playChime(); // soft chime on the moment of selection
   buildPoem(f.index); // swap in the poem matching the chosen flower
   phase = PHASE.TRANSITION;
   popup.classList.remove("visible");
@@ -952,6 +1031,7 @@ function petalLoop(now) {
   if (!_petalsWasActive) {
     petals.length = 0;
     for (let i = 0; i < params.petalCount; i++) petals.push(makePetal(true));
+    petalCanvas.style.opacity = "1"; // CSS transitions the layer in slowly
     _petalsWasActive = true;
   }
   // Track live count changes from the GUI (new petals stream in from the edges).
@@ -1073,6 +1153,8 @@ function damp(current, target, lambda, dt) {
 function animate() {
   const dt = Math.min(clock.getDelta(), 0.05);
   const elapsed = clock.getElapsedTime();
+
+  updateAmbientVolume(); // per-frame loop-seam fade envelope
 
   // Smoothly ease the hover popup toward the cursor.
   popupX += (popupTargetX - popupX) * POPUP_FOLLOW;
@@ -1329,9 +1411,22 @@ back.addColor(params, "backsideColor").onChange(updateBackside);
 back.add(params, "backsideStrength", 0, 1, 0.02).onChange(updateBackside);
 back.close();
 
+const audioFolder = gui.addFolder("audio");
+audioFolder.add(AUDIO, "muted").name("mute").onChange((m) => {
+  ambient.muted = m;
+  if (!m) startAmbient(); // unmuting also (re)starts the bed if a gesture happened
+});
+audioFolder.add(AUDIO, "musicVolume", 0, 1, 0.01).name("music volume");
+// (volume is applied per-frame by updateAmbientVolume via the fade envelope)
+audioFolder.add(AUDIO, "chimeVolume", 0, 1, 0.01).name("chime volume");
+audioFolder.close();
+
 window.addEventListener("resize", () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
   resizePetalCanvas();
 });
+
+// Hidden for production. Press "H" to reveal the panel for live tuning.
+gui.hide();
