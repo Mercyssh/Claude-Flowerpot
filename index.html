@@ -4,7 +4,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Flowerpot — POC</title>
+  <title>Flowerpot</title>
+  <link rel="icon" type="image/png" href="./assets/webicon.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link
     href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;600&family=Cormorant+Garamond:ital@0;1&display=swap"
@@ -13,6 +14,17 @@
 </head>
 
 <body>
+  <!-- Loading screen — covers everything until all assets have downloaded -->
+  <div id="loader">
+    <div class="loader-inner">
+      <div class="loader-flower"></div>
+      <div class="loader-label">gathering flowers…</div>
+      <div class="loader-track">
+        <div id="loader-bar"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Landing background text (HTML, sits behind the transparent canvas) -->
   <h1 id="bg-text">Pick a Flower<br>for Yourself</h1>
 

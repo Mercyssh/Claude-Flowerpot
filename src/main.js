@@ -223,8 +223,8 @@ startAmbient(); // best-effort immediate start (silently rejected if blocked)
 // ---------------------------------------------------------------------------
 // State machine
 // ---------------------------------------------------------------------------
-const PHASE = { INTRO: "intro", CHOOSING: "choosing", TRANSITION: "transition", PORTRAIT: "portrait" };
-let phase = PHASE.INTRO;
+const PHASE = { LOADING: "loading", INTRO: "intro", CHOOSING: "choosing", TRANSITION: "transition", PORTRAIT: "portrait" };
+let phase = PHASE.LOADING; // held here until the loading screen hands off (see below)
 
 const flowers = [];        // { group, morphMeshes[], target, current, homePos, homeScale }
 let hovered = null;
@@ -241,12 +241,78 @@ let flowerAnchor = null;   // empty pulled from the GLB; flower flies + faces he
 const headEdit = { show: false, mode: "translate" };
 
 // ---------------------------------------------------------------------------
+// Loading screen — hold the intro + headline until every asset (GLB models,
+// textures, fonts, audio) has downloaded, then fade the loader out and start.
+// three.js loads funnel through one LoadingManager; audio + fonts are tracked
+// separately and folded into a single readiness gate.
+// ---------------------------------------------------------------------------
+const loaderEl = document.getElementById("loader");
+const loaderBar = document.getElementById("loader-bar");
+const loadingManager = new THREE.LoadingManager();
+
+// Weighted progress bar: models/textures dominate the download, so they drive
+// most of the bar; audio + fonts top it off.
+let _threeFrac = 0, _audioFrac = 0, _fontFrac = 0;
+function paintLoaderBar() {
+  const pct = Math.round((_threeFrac * 0.7 + _audioFrac * 0.2 + _fontFrac * 0.1) * 100);
+  if (loaderBar) loaderBar.style.width = pct + "%";
+}
+loadingManager.onProgress = (url, loaded, total) => {
+  _threeFrac = total ? loaded / total : 0;
+  paintLoaderBar();
+};
+const threeReady = new Promise((resolve) => { loadingManager.onLoad = resolve; });
+
+// Audio readiness — kick off buffering and resolve when each clip can play
+// through. `error` also resolves so one bad file can't trap the loader forever.
+function audioReady(a) {
+  return new Promise((resolve) => {
+    if (a.readyState >= 4) return resolve(); // HAVE_ENOUGH_DATA
+    const done = () => {
+      a.removeEventListener("canplaythrough", done);
+      a.removeEventListener("error", done);
+      resolve();
+    };
+    a.addEventListener("canplaythrough", done, { once: true });
+    a.addEventListener("error", done, { once: true });
+    a.load();
+  });
+}
+const audioClips = [ambient, chimePool[0]]; // pool shares one URL → browser caches
+let _audioDone = 0;
+const audioReadyAll = audioClips.map((a) =>
+  audioReady(a).then(() => {
+    _audioFrac = ++_audioDone / audioClips.length;
+    paintLoaderBar();
+  })
+);
+const fontsReady = document.fonts.ready.then(() => { _fontFrac = 1; paintLoaderBar(); });
+
+// Hand off to the experience once everything is in — or after a hard timeout so
+// a stuck asset never leaves the visitor staring at the loader. Flipping `phase`
+// to INTRO is what actually starts the fly-in (see the animate loop).
+let _started = false;
+function startExperience() {
+  if (_started) return;
+  _started = true;
+  document.body.classList.add("started"); // release the headline cascade
+  if (loaderEl) loaderEl.classList.add("loaded");
+  const begin = () => { introTime = 0; phase = PHASE.INTRO; };
+  if (introCurve) begin();
+  else { // flowers not built yet (only reachable via the timeout) — wait for them
+    const iv = setInterval(() => { if (introCurve) { begin(); clearInterval(iv); } }, 100);
+  }
+}
+Promise.all([threeReady, ...audioReadyAll, fontsReady]).then(startExperience);
+setTimeout(startExperience, 15000); // safety net
+
+// ---------------------------------------------------------------------------
 // Load the flower and clone it into 3 instances
 // ---------------------------------------------------------------------------
-const loader = new GLTFLoader();
+const loader = new GLTFLoader(loadingManager);
 
 // Hand-painted base colors — one texture per distinct flower model.
-const texLoader = new THREE.TextureLoader();
+const texLoader = new THREE.TextureLoader(loadingManager);
 function loadFlowerTex(url) {
   const t = texLoader.load(url);
   t.colorSpace = THREE.SRGBColorSpace;
@@ -571,7 +637,7 @@ function applyFlowerOffset(i) {
 // The GLB carries a "floweranchor" empty; the chosen flower flies to it and
 // takes its orientation so it faces along the anchor's local Z.
 // ---------------------------------------------------------------------------
-const personTex = new THREE.TextureLoader().load("./person%20model/base_color.png");
+const personTex = texLoader.load("./person%20model/base_color.png"); // managed → tracked by the loader
 personTex.colorSpace = THREE.SRGBColorSpace;
 personTex.flipY = false; // glTF UV convention
 
