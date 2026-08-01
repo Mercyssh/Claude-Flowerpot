@@ -12,6 +12,7 @@ const params = {
   bloomSpeed: 2.5,          // how fast a flower blooms/closes on hover
   flowerAttachScale: 0.35,  // scale the chosen flower shrinks to on the head
   flowerSpacing: 1.27,      // x-distance of the outer flowers from center
+  hoverPushBack: 0.6,       // how far (-Z) the non-hovered flowers recede on hover
   orbitAmountX: 0.08,       // portrait mouse-look: vertical tilt range as cursor moves top↔bottom (radians)
   orbitAmountY: 0.35,       // portrait mouse-look: horizontal turn range as cursor moves left↔right (radians)
   paintSpeed: 0.3,          // paint-in dissolve speed (progress/sec)
@@ -382,6 +383,7 @@ Promise.all([
       homeQuat: group.quaternion.clone(), // base orientation; spin composes on top
       noiseUniforms,
       index: i,
+      zPush: 0, // eased -Z recede while a *different* flower is hovered
     };
     setBloom(entry, 1);
     scene.add(group);
@@ -1037,6 +1039,11 @@ function animate() {
       const ramp = easeInOutCubic(clamp01((elapsed - chooseStart) / BOB_RAMP));
       const bob = Math.sin(elapsed * params.bobSpeed + f.index * 2.1) * params.bobAmount * ramp;
       f.group.position.y = f.homePos.y + bob;
+      // When another flower is hovered, recede in -Z so its bloom doesn't clip
+      // into this one. Damped at bloomSpeed so the recede tracks the bloom.
+      const pushTarget = (hovered && f !== hovered) ? -params.hoverPushBack : 0;
+      f.zPush = damp(f.zPush, pushTarget, params.bloomSpeed, dt);
+      f.group.position.z = f.homePos.z + f.zPush;
     }
   }
 
@@ -1124,6 +1131,7 @@ animate();
 const gui = new GUI({ title: "Flowerpot params" });
 gui.add(params, "bloomSpeed", 1, 15, 0.1);
 gui.add(params, "flowerSpacing", 0, 2.5, 0.01).onChange(applyFlowerSpacing);
+gui.add(params, "hoverPushBack", 0, 2, 0.01);
 gui.add(params, "flowerAttachScale", 0.05, 1, 0.01);
 gui.add(params, "orbitAmount", 0, 0.5, 0.01);
 
