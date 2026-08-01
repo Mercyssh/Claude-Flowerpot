@@ -324,11 +324,13 @@ function setBloom(entry, value) {
 // Per-flower controls (index = layout slot: 0 left, 1 center, 2 right). All are
 // live-editable in the GUI. closedShrink/openScale are the scales before/after
 // bloom; rx/ry/rz are the resting orientation each flower holds once the intro
-// fly-in ends (bloom spin composes on top).
+// fly-in ends (bloom spin composes on top); offsetY nudges the home spot up (+)
+// or down (-) from the shared base height.
+const FLOWER_BASE_Y = -1.2; // shared home height before per-flower offsetY
 const flowerCfg = [
-  { closedShrink: 0.7, openScale: 0.8, rx: 0.681, ry: -0.15, rz: 0.35 },
-  { closedShrink: 0.46, openScale: 0.8, rx: 0.838, ry: -1.55, rz: 0.18 },
-  { closedShrink: 0.7, openScale: 1.22, rx: 0.75, ry: 0.15, rz: -0.35 },
+  { closedShrink: 0.7, openScale: 0.8, rx: 0.681, ry: -0.15, rz: 0.35, offsetY: 0 },
+  { closedShrink: 0.46, openScale: 0.8, rx: 0.838, ry: -1.55, rz: 0.18, offsetY: 0.3 },
+  { closedShrink: 0.7, openScale: 1.22, rx: 0.75, ry: 0.15, rz: -0.35, offsetY: 0 },
 ];
 
 // Fan layout: position basics per slot. `src` picks the GLB + texture — centre
@@ -365,7 +367,7 @@ Promise.all([
         noiseUniforms.push(o.material.userData.noiseUniforms);
       }
     });
-    group.position.set(L.dir * params.flowerSpacing, -1.2, L.z);
+    group.position.set(L.dir * params.flowerSpacing, FLOWER_BASE_Y + cfg.offsetY, L.z);
     group.rotation.set(cfg.rx, cfg.ry, cfg.rz);
     group.scale.setScalar(cfg.closedShrink); // start closed = shrunk
 
@@ -466,6 +468,15 @@ function applyFlowerRotation(i) {
   if (!f) return;
   const c = flowerCfg[i];
   f.homeQuat.setFromEuler(_cfgEuler.set(c.rx, c.ry, c.rz));
+}
+
+// Push a flower's edited vertical offset (flowerCfg[i].offsetY) into its homePos.
+// The choosing-phase bob is anchored to homePos.y, so this shifts the whole rest
+// spot up/down. GUI hook; takes effect next frame.
+function applyFlowerOffset(i) {
+  const f = flowers.find((fl) => fl.index === i);
+  if (!f) return;
+  f.homePos.y = FLOWER_BASE_Y + flowerCfg[i].offsetY;
 }
 
 // ---------------------------------------------------------------------------
@@ -1125,6 +1136,7 @@ flowerCfg.forEach((cfg, i) => {
   const sub = perFlower.addFolder(slotNames[i]);
   sub.add(cfg, "closedShrink", 0.3, 1.5, 0.01).name("scale before bloom");
   sub.add(cfg, "openScale", 0.3, 2.0, 0.01).name("scale after bloom");
+  sub.add(cfg, "offsetY", -1.5, 1.5, 0.01).name("offset y").onChange(() => applyFlowerOffset(i));
   sub.add(cfg, "rx", -Math.PI, Math.PI, 0.01).name("rot x").onChange(() => applyFlowerRotation(i));
   sub.add(cfg, "ry", -Math.PI, Math.PI, 0.01).name("rot y").onChange(() => applyFlowerRotation(i));
   sub.add(cfg, "rz", -Math.PI, Math.PI, 0.01).name("rot z").onChange(() => applyFlowerRotation(i));
