@@ -118,6 +118,30 @@ html {
   transition: width 0.3s ease;
 }
 
+/* "Tap to begin" — hidden while downloading; the loader swaps into this state
+   once every asset is ready (JS adds .ready). The tap that dismisses it also
+   unlocks audio, so the music starts on the experience's first frame. */
+.loader-hint {
+  font-family: "Qinferly", "Caveat", cursive;
+  font-size: 26px;
+  color: #c08c72;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+}
+
+#loader.ready {
+  cursor: pointer;
+}
+
+#loader.ready .loader-label,
+#loader.ready .loader-track {
+  display: none;
+}
+
+#loader.ready .loader-hint {
+  opacity: 1;
+}
+
 /* Hold the headline cascade until the loader is dismissed. A paused animation
    sits frozen before its delay, so it plays in full once .started is added. */
 body:not(.started) #bg-text .char-inner {

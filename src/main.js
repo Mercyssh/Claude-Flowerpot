@@ -63,7 +63,7 @@ const CURVE_TENSION = 0.75;      // intro spline corner roundness
 const POPUP_TEXT = [
   "Beautiful, as you are..",
   "Clever, like your mind..",
-  "Comfort, that you give..",
+  "Comforting, like your hug..",
 ];
 
 // One poem per flower — index matches the flower's layout index (0 = left,
@@ -288,14 +288,25 @@ const audioReadyAll = audioClips.map((a) =>
 );
 const fontsReady = document.fonts.ready.then(() => { _fontFrac = 1; paintLoaderBar(); });
 
-// Hand off to the experience once everything is in — or after a hard timeout so
-// a stuck asset never leaves the visitor staring at the loader. Flipping `phase`
-// to INTRO is what actually starts the fly-in (see the animate loop).
+// Two-stage handoff. When every asset is in, the loader flips to a "tap to
+// begin" state; the entering tap then starts the experience. That tap is also
+// the audio-unlock gesture — browsers block autoplay until the user interacts —
+// so the bed plays from the first frame instead of only after some later click.
+let _ready = false;
+function onAssetsReady() {
+  if (_ready) return;
+  _ready = true;
+  if (loaderEl) loaderEl.classList.add("ready"); // reveals the "tap to begin" prompt
+}
+Promise.all([threeReady, ...audioReadyAll, fontsReady]).then(onAssetsReady);
+setTimeout(onAssetsReady, 15000); // safety net — never strand the visitor on the loader
+
 let _started = false;
 function startExperience() {
-  if (_started) return;
+  if (!_ready || _started) return;
   _started = true;
-  document.body.classList.add("started"); // release the headline cascade
+  startAmbient();                          // in-gesture → music starts immediately
+  document.body.classList.add("started");  // release the headline cascade
   if (loaderEl) loaderEl.classList.add("loaded");
   const begin = () => { introTime = 0; phase = PHASE.INTRO; };
   if (introCurve) begin();
@@ -303,8 +314,10 @@ function startExperience() {
     const iv = setInterval(() => { if (introCurve) { begin(); clearInterval(iv); } }, 100);
   }
 }
-Promise.all([threeReady, ...audioReadyAll, fontsReady]).then(startExperience);
-setTimeout(startExperience, 15000); // safety net
+// Enter on the first tap/click/key once ready (the loader itself is the target,
+// but a keypress works too for accessibility).
+if (loaderEl) loaderEl.addEventListener("pointerdown", startExperience);
+window.addEventListener("keydown", startExperience);
 
 // ---------------------------------------------------------------------------
 // Load the flower and clone it into 3 instances
