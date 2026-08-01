@@ -36,6 +36,11 @@ body {
   width: 100%;
   height: 100%;
   overflow: hidden;
+}
+
+/* Page background lives on <html> only. If it were on <body> (an in-flow box), its
+   background would paint on top of the z-index:-1 petal canvas and hide it. */
+html {
   background: #f6ece2;
 }
 
@@ -128,6 +133,20 @@ body {
 .popup.visible {
   opacity: 1;
   transform: translate(-50%, var(--popup-offset-y, 4px)) scale(1);
+}
+
+/* Per-flower popup colour themes (set in JS from the hovered flower's index). */
+.popup.theme-left   { background: #b62b22; color: #fff7f2; }   /* left  — red bg,  white text */
+.popup.theme-center { background: #fbf7ee; color: #8a6d0a; }   /* center— white bg, dark-yellow text */
+.popup.theme-right  { background: #234fb0; color: #f2f5ff; }   /* right — blue bg, white text */
+
+/* Falling-petal back layer — pinned behind every mesh and text (z-index -1, below
+   #bg-text at 0). Drawn on a 2D canvas; see the petal system in main.js. */
+#petals {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
 }
 
 /* Poem panel — right half, scroll-reveal in phase 2 */

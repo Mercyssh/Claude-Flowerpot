@@ -38,6 +38,12 @@ const params = {
   personBobSpeed: 0.9,      // vertical bob frequency of the person (radians/sec)
   personInvertX: true,      // invert mouse-look tilt (X axis): head tilts away from cursor
   personInvertY: false,      // invert mouse-look turn (Y axis): head turns away from cursor
+  fallingPetals: true,      // toggle the falling-petal back layer (starts once a flower is chosen)
+  petalColor: "#e1d9c1",    // petal fill — unlit, slightly darker than the page bg (#f6ece2)
+  petalCount: 26,           // how many petals drift on screen at once
+  petalFallSpeed: 55,       // downward drift speed (px/sec)
+  petalSize: 45,            // petal length (px)
+  petalOpacity: 0.6,        // petal alpha (soft = a bit transparent)
 };
 
 // Paint-stroke travel directions (object space) for the head reveal.
@@ -739,13 +745,17 @@ function flowerUnderPointer() {
   return null;
 }
 
+// Popup colour theme per flower slot (0 left, 1 center, 2 right).
+const POPUP_THEMES = ["theme-left", "theme-center", "theme-right"];
+
 window.addEventListener("pointermove", () => {
   if (phase !== PHASE.CHOOSING || headEdit.show) return;
   const f = flowerUnderPointer();
   hovered = f;
   if (f) {
     popup.textContent = POPUP_TEXT[f.index] || "";
-    popup.classList.add("visible");
+    popup.classList.remove(...POPUP_THEMES);
+    popup.classList.add(POPUP_THEMES[f.index], "visible");
   } else {
     popup.classList.remove("visible");
   }
@@ -765,6 +775,7 @@ window.addEventListener("pointerdown", () => {
   flowerSnapT = 0;
   snapCaptured = false;
   bgText?.classList.add("faded"); // fade the landing headline out
+  petalsActive = true;            // start the falling-petal back layer
 });
 
 // Scroll-reveal for the poem. Lines are built dynamically per selected flower
@@ -872,6 +883,102 @@ function buildPoem(index) {
     lines.forEach((l) => io.observe(l));
   });
 }
+
+// ---------------------------------------------------------------------------
+// Falling petals — a soft back layer that drifts top-right → bottom-left once a
+// flower is chosen. Drawn on its own 2D canvas pinned at z-index -1 (behind every
+// mesh and text). Each petal falls down-left with a gentle sine sway + slow spin;
+// they recycle to the top-right when they leave the bottom-left. Toggleable via
+// params.fallingPetals; petalsActive gates it on until a flower is picked.
+// ---------------------------------------------------------------------------
+let petalsActive = false;
+const petalCanvas = document.createElement("canvas");
+petalCanvas.id = "petals";
+document.body.appendChild(petalCanvas);
+const petalCtx = petalCanvas.getContext("2d");
+const petals = [];
+
+function resizePetalCanvas() {
+  const dpr = Math.min(window.devicePixelRatio, 2);
+  petalCanvas.width = window.innerWidth * dpr;
+  petalCanvas.height = window.innerHeight * dpr;
+  petalCtx.setTransform(dpr, 0, 0, dpr, 0, 0); // draw in CSS pixels
+}
+resizePetalCanvas();
+
+const rand = (a, b) => a + Math.random() * (b - a);
+
+// Seed a petal. `prefill` spreads the initial batch across the whole screen so the
+// effect starts already populated; otherwise petals enter from the top / right edge.
+function makePetal(prefill) {
+  const w = window.innerWidth, h = window.innerHeight;
+  const fromTop = Math.random() < 0.65; // bias origin toward the top-right band
+  return {
+    x: prefill ? rand(0, w) : fromTop ? rand(0, w * 1.15) : w + rand(10, 60),
+    y: prefill ? rand(0, h) : fromTop ? rand(-60, -10) : rand(-40, h * 0.5),
+    sizeMul: rand(0.7, 1.3),     // per-petal size variation off params.petalSize
+    speedMul: rand(0.75, 1.35),  // per-petal fall-speed variation
+    rot: rand(0, Math.PI * 2),
+    rotSpeed: rand(-0.6, 0.6),   // slow tumble (rad/sec)
+    swayPhase: rand(0, Math.PI * 2),
+    swayFreq: rand(0.4, 0.9),    // lateral sway rate (rad/sec)
+    swayAmp: rand(12, 30),       // lateral sway reach (px/sec)
+  };
+}
+
+// One petal path, centred at the origin, drawn in the current fill colour.
+function drawPetal(len) {
+  const wid = len * 0.62;
+  petalCtx.beginPath();
+  petalCtx.moveTo(0, -len / 2);
+  petalCtx.quadraticCurveTo(wid / 2, 0, 0, len / 2);
+  petalCtx.quadraticCurveTo(-wid / 2, 0, 0, -len / 2);
+  petalCtx.fill();
+}
+
+let petalPrev = performance.now();
+let _petalsWasActive = false;
+function petalLoop(now) {
+  requestAnimationFrame(petalLoop);
+  const dt = Math.min((now - petalPrev) / 1000, 0.05);
+  petalPrev = now;
+
+  const w = window.innerWidth, h = window.innerHeight;
+  petalCtx.clearRect(0, 0, w, h);
+  if (!petalsActive || !params.fallingPetals) return; // off → leave the layer blank
+
+  // First active frame: prefill the whole batch spread across the screen so the
+  // layer starts populated rather than trickling in from the corner.
+  if (!_petalsWasActive) {
+    petals.length = 0;
+    for (let i = 0; i < params.petalCount; i++) petals.push(makePetal(true));
+    _petalsWasActive = true;
+  }
+  // Track live count changes from the GUI (new petals stream in from the edges).
+  while (petals.length < params.petalCount) petals.push(makePetal(false));
+  if (petals.length > params.petalCount) petals.length = params.petalCount;
+
+  petalCtx.fillStyle = params.petalColor;
+  petalCtx.globalAlpha = params.petalOpacity;
+  const vy = params.petalFallSpeed;
+  for (const p of petals) {
+    p.y += vy * p.speedMul * dt;
+    p.x -= vy * p.speedMul * 0.65 * dt; // down-left drift (x moves left as it falls)
+    p.x += Math.sin(now / 1000 * p.swayFreq + p.swayPhase) * p.swayAmp * dt; // gentle sway
+    p.rot += p.rotSpeed * dt;
+    // Recycle once it exits the bottom-left; re-enter from the top-right.
+    if (p.y > h + 40 || p.x < -40) Object.assign(p, makePetal(false));
+
+    const len = params.petalSize * p.sizeMul;
+    petalCtx.save();
+    petalCtx.translate(p.x, p.y);
+    petalCtx.rotate(p.rot);
+    drawPetal(len);
+    petalCtx.restore();
+  }
+  petalCtx.globalAlpha = 1;
+}
+requestAnimationFrame(petalLoop);
 
 // ---------------------------------------------------------------------------
 // Animation loop
@@ -1167,6 +1274,15 @@ cam.add(params, "fovBefore", 10, 90, 1).name("fov (before select)");
 cam.add(params, "fovAfter", 10, 90, 1).name("fov (after select)");
 cam.close();
 
+const petalFx = gui.addFolder("falling petals");
+petalFx.add(params, "fallingPetals").name("enabled");
+petalFx.addColor(params, "petalColor").name("color");
+petalFx.add(params, "petalCount", 0, 120, 1).name("count");
+petalFx.add(params, "petalFallSpeed", 10, 200, 1).name("fall speed");
+petalFx.add(params, "petalSize", 6, 60, 1).name("size");
+petalFx.add(params, "petalOpacity", 0, 1, 0.02).name("opacity");
+petalFx.close();
+
 // Person model placement — draggable gizmo + exact numeric fields.
 headFolder = gui.addFolder("person model");
 headFolder.add(headEdit, "show").name("edit (show + gizmo)").onChange(setHeadEdit);
@@ -1217,4 +1333,5 @@ window.addEventListener("resize", () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  resizePetalCanvas();
 });
