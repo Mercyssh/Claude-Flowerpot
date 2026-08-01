@@ -170,6 +170,7 @@ function loadFlowerTex(url) {
 }
 const flower1Tex = loadFlowerTex("./flower1/flower1_basecolor.png");
 const flower2Tex = loadFlowerTex("./flower2/DefaultMaterial_BaseColor.png");
+const flower3Tex = loadFlowerTex("./flower3/DefaultMaterial_BaseColor.png");
 
 // Ashima 3D simplex noise — used in the vertex stage to add smooth, organic
 // wobble to every petal. Returns roughly [-1, 1].
@@ -326,26 +327,29 @@ function setBloom(entry, value) {
 // fly-in ends (bloom spin composes on top).
 const flowerCfg = [
   { closedShrink: 0.7, openScale: 0.8, rx: 0.681, ry: -0.15, rz: 0.35 },
-  { closedShrink: 0.7, openScale: 0.8, rx: 0.838, ry: 0.0, rz: 0.0 },
-  { closedShrink: 0.7, openScale: 0.8, rx: 0.75, ry: 0.15, rz: -0.35 },
+  { closedShrink: 0.46, openScale: 0.8, rx: 0.838, ry: -1.55, rz: 0.18 },
+  { closedShrink: 0.7, openScale: 1.22, rx: 0.75, ry: 0.15, rz: -0.35 },
 ];
 
-// Fan layout: position basics per slot. `src` picks the GLB + texture — the right
-// (3rd) flower is flower2, the other two flower1. Scale + rotation live in flowerCfg.
+// Fan layout: position basics per slot. `src` picks the GLB + texture — centre
+// (2nd) is flower3, right (3rd) is flower2, left (1st) is flower1. Scale +
+// rotation live in flowerCfg.
 const layout = [
   { dir: -1, z: -0.4, src: "f1" },
-  { dir: 0, z: 0, src: "f1" },
+  { dir: 0, z: 0, src: "f3" },
   { dir: 1, z: -0.4, src: "f2" },
 ];
 
 Promise.all([
   loader.loadAsync("./flower1/flower1.glb"),
   loader.loadAsync("./flower2/flower2.glb"),
-]).then(([g1, g2]) => {
+  loader.loadAsync("./flower3/flower3.glb"),
+]).then(([g1, g2, g3]) => {
   // Each source pairs a base scene to clone with its own base-color texture.
   const bases = {
     f1: { scene: g1.scene, tex: flower1Tex },
     f2: { scene: g2.scene, tex: flower2Tex },
+    f3: { scene: g3.scene, tex: flower3Tex },
   };
 
   layout.forEach((L, i) => {
